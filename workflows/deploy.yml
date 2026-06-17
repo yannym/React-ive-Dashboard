@@ -22,9 +22,17 @@ jobs:
 
       - name: Build project
         run: |
-          npm run build
-          # The 'build' script creates 'dist/', we rename it to 'live' for GH Pages
-          mv dist live
+          # 1. Run only the Vite build to generate frontend assets
+          npx vite build
+          
+          # 2. Rename the output folder to 'live'
+          # We check if it exists first to be safe
+          if [ -d "dist" ]; then
+            mv dist live
+          else
+            echo "Build failed: dist folder not found"
+            exit 1
+          fi
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
