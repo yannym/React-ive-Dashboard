@@ -22,13 +22,12 @@ jobs:
 
       - name: Build project
         run: |
-          # Builds your frontend assets into the 'dist' folder
           npm run build
-          # Moves 'dist' to 'live' as requested
+          # The 'build' script creates 'dist/', we rename it to 'live' for GH Pages
           mv dist live
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./live
+          publish_dir: ./live # This points to the folder you created
