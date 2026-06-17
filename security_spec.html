@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Firestore Security Specification (Applet Dashboard) | React-ive-Dashboard</title>
+<meta name="generator" content="Jekyll v3.10.0" />
+<meta property="og:title" content="Firestore Security Specification (Applet Dashboard)" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Mini applet dashboard built in react" />
+<meta property="og:description" content="Mini applet dashboard built in react" />
+<link rel="canonical" href="https://yannym.github.io/React-ive-Dashboard/security_spec.html" />
+<meta property="og:url" content="https://yannym.github.io/React-ive-Dashboard/security_spec.html" />
+<meta property="og:site_name" content="React-ive-Dashboard" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Firestore Security Specification (Applet Dashboard)" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebPage","description":"Mini applet dashboard built in react","headline":"Firestore Security Specification (Applet Dashboard)","url":"https://yannym.github.io/React-ive-Dashboard/security_spec.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="stylesheet" href="/React-ive-Dashboard/assets/css/style.css?v=7dbdfad722fb5718010a66a29ca4d8ef4ef5cda6">
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup Google Analytics -->
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/React-ive-Dashboard/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+  </head>
+  <body>
+    <div class="container-lg px-3 my-5 markdown-body">
+      
+      <h1><a href="https://yannym.github.io/React-ive-Dashboard/">React-ive-Dashboard</a></h1>
+      
+
+      <h1 id="firestore-security-specification-applet-dashboard">Firestore Security Specification (Applet Dashboard)</h1>
+
+<h2 id="1-data-invariants">1. Data Invariants</h2>
+<ul>
+  <li>An applet configuration document must always be associated with a valid Gmail/Google authenticated <code class="language-plaintext highlighter-rouge">uid</code> stored in <code class="language-plaintext highlighter-rouge">ownerId</code>.</li>
+  <li>No user can read, list, delete, or update applet definitions that belong to another user’s authenticated account (strict private isolation).</li>
+  <li>Document paths must map precisely: <code class="language-plaintext highlighter-rouge">/applets/{appletId}</code> where <code class="language-plaintext highlighter-rouge">appletId</code> strictly matches the field <code class="language-plaintext highlighter-rouge">id</code> inside the resource.</li>
+  <li>String fields must possess strict sizing boundaries to mitigate denial-of-wallet payload attacks (e.g., custom embedCode capped at 100KB, URL capped at 2083 characters).</li>
+</ul>
+
+<hr />
+
+<h2 id="2-the-dirty-dozen-malicious-payloads">2. The Dirty Dozen (Malicious Payloads)</h2>
+<p>The following payloads are explicitly designed to test boundaries and must be blocked with <code class="language-plaintext highlighter-rouge">PERMISSION_DENIED</code>.</p>
+
+<ol>
+  <li><strong>The Identity Hijack</strong>: Creating an applet under another user’s credentials.
+    <div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="w"> </span><span class="nl">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"app123"</span><span class="p">,</span><span class="w"> </span><span class="nl">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Fake App"</span><span class="p">,</span><span class="w"> </span><span class="nl">"category"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Util"</span><span class="p">,</span><span class="w"> </span><span class="nl">"openMode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"iframe"</span><span class="p">,</span><span class="w"> </span><span class="nl">"ownerId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"victim_uid"</span><span class="w"> </span><span class="p">}</span><span class="w">
+</span></code></pre></div>    </div>
+  </li>
+  <li><strong>The Anonymous Write</strong>: Creating a record without being signed in (<code class="language-plaintext highlighter-rouge">request.auth == null</code>).</li>
+  <li><strong>The Size Exhaustion (Name)</strong>: Injecting a 5MB string for the <code class="language-plaintext highlighter-rouge">name</code> field to inflate Firestore database storage.</li>
+  <li><strong>The Size Exhaustion (Description)</strong>: Injecting a massive string in the description.</li>
+  <li><strong>The Unbounded Tag Flood</strong>: Sending a list of 1,000 array elements under <code class="language-plaintext highlighter-rouge">tags</code>.</li>
+  <li><strong>The Shadow Field Injection</strong>: Injecting administrative overrides (e.g. <code class="language-plaintext highlighter-rouge">isAdmin: true</code> or <code class="language-plaintext highlighter-rouge">isServerApproved: true</code>) that are outside the entity’s blueprint.</li>
+  <li><strong>The ID Spoofing/Drift</strong>: Setting the document ID path parameter as <code class="language-plaintext highlighter-rouge">app_abc</code> while the document body contains <code class="language-plaintext highlighter-rouge">id: "app_xyz"</code>.</li>
+  <li><strong>The Garbage ID Injection</strong>: Attempting to poison paths with control/injectable characters (e.g., <code class="language-plaintext highlighter-rouge">/applets/../../../etc/passwd</code> or extremely long strings).</li>
+  <li><strong>The Arbitrary Mode Injection</strong>: Passing an invalid enum string for <code class="language-plaintext highlighter-rouge">openMode</code> (e.g., <code class="language-plaintext highlighter-rouge">"openMode": "backdoor_shell"</code>).</li>
+  <li><strong>The Untyped Array Injector</strong>: Injecting non-string types inside the tags list (e.g. <code class="language-plaintext highlighter-rouge">tags: [123, true, {}]</code>).</li>
+  <li><strong>The System Timestamp Hijack</strong>: Bypassing server validation to forge custom historic creation dates via client payload manipulation.</li>
+  <li><strong>The Ghost Update</strong>: Changing the <code class="language-plaintext highlighter-rouge">ownerId</code> of an existing applet post-creation to transfer/hijack ownership.</li>
+</ol>
+
+<hr />
+
+<h2 id="3-security-hardening-blueprint">3. Security Hardening Blueprint</h2>
+<p>These constraints are tested and enforced in <code class="language-plaintext highlighter-rouge">firestore.rules</code>.</p>
+<ul>
+  <li>Default deny: <code class="language-plaintext highlighter-rouge">match /{document=**} { allow read, write: if false; }</code></li>
+  <li>Rules Version: <code class="language-plaintext highlighter-rouge">2</code> (supporting list-isolation and set diffing).</li>
+  <li>Explicit <code class="language-plaintext highlighter-rouge">get()</code> check validation when referencing relational data.</li>
+</ul>
+
+
+      
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+    <script>anchors.add();</script>
+  </body>
+</html>
