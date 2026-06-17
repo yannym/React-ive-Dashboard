@@ -5,6 +5,10 @@ on:
     branches:
       - main 
 
+# This block grants the runner permission to create and push branches
+permissions:
+  contents: write
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -20,12 +24,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build project
-        run: npm run build
+      - name: Build Pure Static Frontend
+        # npx vite build ignores the backend server bundle and outputs clean HTML/JS to 'dist'
+        run: npx vite build
 
       - name: Deploy to 'live' branch
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist   # Vite builds your static assets into 'dist'
-          publish_branch: live  # Pushes those assets to a branch named 'live'
+          publish_dir: ./dist   # Pushes the pure static assets from 'dist'
+          publish_branch: live  # Moves them into a branch named 'live'
