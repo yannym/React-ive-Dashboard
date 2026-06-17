@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Auth & Core Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. Schema & Bound Validation Helper
+    function isValidApplet(data) {
+      return data.keys().hasAll(['id', 'name', 'category', 'openMode', 'ownerId'])
+        && data.keys().size() <= 14
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 100 && data.name.size() > 0
+        && data.category is string && data.category.size() <= 50
+        && data.openMode is string && (data.openMode == 'iframe' || data.openMode == 'new_tab')
+        && data.ownerId is string && data.ownerId == request.auth.uid
+        // Optional visual/configuration parameters checked for types and bounds
+        && (!data.keys().contains('description') || (data.description is string && data.description.size() <= 500))
+        && (!data.keys().contains('url') || (data.url is string && data.url.size() <= 2083))
+        && (!data.keys().contains('embedCode') || (data.embedCode is string && data.embedCode.size() <= 100000))
+        && (!data.keys().contains('icon') || (data.icon is string && data.icon.size() <= 100))
+        && (!data.keys().contains('accentColor') || (data.accentColor is string && data.accentColor.size() <= 100))
+        && (!data.keys().contains('isPinned') || data.isPinned is bool)
+        && (!data.keys().contains('tags') || (data.tags is list && data.tags.size() <= 20))
+        && (!data.keys().contains('createdAt') || data.createdAt is timestamp || data.createdAt is string)
+        && (!data.keys().contains('updatedAt') || data.updatedAt is timestamp || data.updatedAt is string);
+    }
+
+    // 4. Applet Collection Rules
+    match /applets/{appletId} {
+      // Direct document fetches and collection lists isolated strictly to owners
+      allow get, list: if isOwner(existing().ownerId);
+
+      allow create: if isSignedIn()
+        && isValidId(appletId)
+        && appletId == incoming().id
+        && isValidApplet(incoming());
+
+      allow update: if isSignedIn()
+        && isValidApplet(incoming())
+        && isOwner(existing().ownerId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().id == existing().id;
+
+      allow delete: if isOwner(existing().ownerId);
+    }
+  }
+}

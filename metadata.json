@@ -1,0 +1,10 @@
+{
+  "name": "Applet Dashboard",
+  "description": "A comprehensive micro-app dashboard to coordinate, run, and customize multiple local and cloud-hosted React, HTML, and iframe applets.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

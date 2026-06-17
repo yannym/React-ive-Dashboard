@@ -1,0 +1,9 @@
+{
+  "apiKey": "dummy-api-key-replace-this",
+  "authDomain": "",
+  "projectId": "dummy-project-12345",
+  "storageBucket": "",
+  "messagingSenderId": "",
+  "appId": "",
+  "firestoreDatabaseId": "(default)"
+}

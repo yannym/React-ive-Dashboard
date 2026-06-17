@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "Applet": {
+      "title": "Applet",
+      "description": "Represents an applet configuration managed within the dashboard.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the applet"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the applet"
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description of the applet functionality"
+        },
+        "url": {
+          "type": "string",
+          "description": "Remote URL or local OMV hosted URL to render inside iframe"
+        },
+        "embedCode": {
+          "type": "string",
+          "description": "Custom HTML/CSS/JS source to embed directly"
+        },
+        "icon": {
+          "type": "string",
+          "description": "Lucide icon key name or emoji for visual identification"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category for layout grouping (e.g., Productivity, System, Entertainment)"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Optional list of searchable labels"
+        },
+        "openMode": {
+          "type": "string",
+          "enum": ["iframe", "new_tab"],
+          "description": "Whether to load the app inside the cockpit iframe or spawn a new browser tab"
+        },
+        "accentColor": {
+          "type": "string",
+          "description": "A tailwind-accent class or hex color code for card borders"
+        },
+        "isPinned": {
+          "type": "boolean",
+          "description": "Whether the applet is pinned to the dashboard favorites"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "The creator UID for multi-device sync authorization"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification timestamp"
+        }
+      },
+      "required": ["id", "name", "category", "openMode", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/applets/{appletId}": {
+      "schema": {
+        "$ref": "#/entities/Applet"
+      },
+      "description": "Cloud collection containing user-defined applets synced across their dashboard nodes."
+    }
+  }
+}
