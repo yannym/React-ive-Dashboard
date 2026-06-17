@@ -21,21 +21,11 @@ jobs:
         run: npm install
 
       - name: Build project
-        run: |
-          # 1. Run only the Vite build to generate frontend assets
-          npx vite build
-          
-          # 2. Rename the output folder to 'live'
-          # We check if it exists first to be safe
-          if [ -d "dist" ]; then
-            mv dist live
-          else
-            echo "Build failed: dist folder not found"
-            exit 1
-          fi
+        run: npm run build
 
-      - name: Deploy
+      - name: Deploy to 'live' branch
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./live # This points to the folder you created
+          publish_dir: ./dist   # This is where Vite puts your files
+          publish_branch: live  # This creates/updates the 'live' branch
