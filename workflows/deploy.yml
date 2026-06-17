@@ -27,5 +27,5 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist   # This is where Vite puts your files
-          publish_branch: live  # This creates/updates the 'live' branch
+          publish_dir: ./dist   # Vite builds your static assets into 'dist'
+          publish_branch: live  # Pushes those assets to a branch named 'live'
