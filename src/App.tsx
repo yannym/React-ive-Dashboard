@@ -175,6 +175,7 @@ export default function App() {
   // UI Panels
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'system'>('storage');
   const [editingApplet, setEditingApplet] = useState<Applet | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -217,10 +218,31 @@ export default function App() {
     addSystemLog('info', 'system', 'Local workspace is mapped to client dashboard sandbox. Port 3000 binds active routing.');
     
     const handleError = (event: ErrorEvent) => {
+      if (!event) return;
+      const msg = String(event.message || '');
+      if (
+        msg.includes('WebSocket') || 
+        msg.includes('vite') || 
+        msg.includes('closed without opened')
+      ) {
+        return; // Ignore benign Vite HMR WebSocket errors
+      }
       addSystemLog('error', 'runtime', event.message, event.error?.stack);
     };
     const handleRejection = (event: PromiseRejectionEvent) => {
+      if (!event) return;
       const reason = event.reason;
+      const reasonStr = String(reason || '');
+      const reasonMsg = String(reason?.message || '');
+      if (
+        reasonStr.includes('WebSocket') || 
+        reasonStr.includes('vite') ||
+        reasonMsg.includes('WebSocket') ||
+        reasonMsg.includes('vite') ||
+        reasonMsg.includes('closed without opened')
+      ) {
+        return; // Ignore benign Vite HMR WebSocket rejections
+      }
       const message = reason instanceof Error ? reason.message : String(reason);
       const stack = reason instanceof Error ? reason.stack : undefined;
       addSystemLog('error', 'promise', `Unhandled Promise Rejection: ${message}`, stack);
@@ -3034,10 +3056,10 @@ export default function App() {
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#121212] border border-white/10 rounded-none w-full max-w-md overflow-hidden flex flex-col justify-between max-h-[90vh]">
-            <div className="border-b border-white/5 p-6 flex items-center justify-between">
+            <div className="border-b border-white/5 p-6 flex items-center justify-between shrink-0">
               <h3 className="text-sm font-serif italic text-white flex items-center gap-2.5">
-                <Database className="w-5 h-5 text-white/40" />
-                Durable Storage Settings
+                <Settings className="w-5 h-5 text-white/40" />
+                Dashboard Settings
               </h3>
               <button 
                 onClick={() => setShowSettingsModal(false)}
@@ -3047,51 +3069,127 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveCustomFirebaseSettings} className="p-6 space-y-4 text-xs font-medium overflow-y-auto">
-              <div className="space-y-1.5 bg-black p-4 border border-white/5 rounded-none">
-                <span className="text-[9px] font-mono font-bold block uppercase text-white/50 tracking-widest mb-1">GitHub Pages & OMV Ready</span>
-                <p className="text-[10px] font-mono text-white/30 uppercase tracking-wider leading-relaxed">
-                  By default, catalog configurations write securely to browser client LocalStorage! To backing up or sharing catalogs, download the JSON back-up. Paste your Firebase configurations below to activate live multi-device real-time sync.
-                </p>
-              </div>
+            {/* Tab Selection */}
+            <div className="flex border-b border-white/5 font-mono text-[9px] uppercase tracking-widest bg-black/40 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSettingsTab('storage')}
+                className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
+                  settingsTab === 'storage' 
+                    ? 'border-white text-white bg-white/5' 
+                    : 'border-transparent text-white/40 hover:text-white/80'
+                }`}
+              >
+                Durable Storage
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab('system')}
+                className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
+                  settingsTab === 'system' 
+                    ? 'border-white text-white bg-white/5' 
+                    : 'border-transparent text-white/40 hover:text-white/80'
+                }`}
+              >
+                System Diagnostics
+              </button>
+            </div>
 
-              <div className="space-y-1.5 border-t border-white/5 pt-4">
-                <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Backend Service Container URL</label>
-                <input
-                  type="text"
-                  placeholder="https://my-express-backend.render.com"
-                  value={customBackendUrl}
-                  onChange={(e) => setCustomBackendUrl(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
-                />
-                <span className="text-[10px] text-white/30 block leading-normal font-mono">
-                  Enter your self-hosted backend container URL (e.g. deployed to Cloud Run, Render, Railway, or running locally via ngrok). This lets your GitHub Pages build execute the Gemini Assistant, read/write files, and compile components live!
-                </span>
-              </div>
+            {settingsTab === 'storage' ? (
+              <form onSubmit={handleSaveCustomFirebaseSettings} className="p-6 space-y-4 text-xs font-medium overflow-y-auto">
+                <div className="space-y-1.5 bg-black p-4 border border-white/5 rounded-none">
+                  <span className="text-[9px] font-mono font-bold block uppercase text-white/50 tracking-widest mb-1">GitHub Pages & OMV Ready</span>
+                  <p className="text-[10px] font-mono text-white/30 uppercase tracking-wider leading-relaxed">
+                    By default, catalog configurations write securely to browser client LocalStorage! To backing up or sharing catalogs, download the JSON back-up. Paste your Firebase configurations below to activate live multi-device real-time sync.
+                  </p>
+                </div>
 
-              <div className="space-y-1.5 border-t border-white/5 pt-4">
-                <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Firebase Web Config (JSON)</label>
-                <textarea
-                  placeholder='{"apiKey": "AIzaSy...", "authDomain": "...", "projectId": "...", ...}'
-                  value={customFirebaseConfig}
-                  onChange={(e) => setCustomFirebaseConfig(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono resize-none h-44 placeholder:text-white/15 text-xs"
-                />
-                <span className="text-[10px] text-white/20 block mt-1.5 italic font-mono leading-normal">
-                  Leave completely empty and save to delete custom key bindings and return fully to local isolated execution.
-                </span>
-              </div>
+                <div className="space-y-1.5 border-t border-white/5 pt-4">
+                  <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Backend Service Container URL</label>
+                  <input
+                    type="text"
+                    placeholder="https://my-express-backend.render.com"
+                    value={customBackendUrl}
+                    onChange={(e) => setCustomBackendUrl(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
+                  />
+                  <span className="text-[10px] text-white/30 block leading-normal font-mono">
+                    Enter your self-hosted backend container URL (e.g. deployed to Cloud Run, Render, Railway, or running locally via ngrok). This lets your GitHub Pages build execute the Gemini Assistant, read/write files, and compile components live!
+                  </span>
+                </div>
 
-              {/* State check */}
-              <div className="flex items-center gap-2 text-[9px] font-mono uppercase tracking-widest bg-[#0A0A0A] p-3 rounded-none border border-white/5">
-                <span className="text-white/40">Sync Toggle Status:</span>
-                {customFirebaseActive ? (
-                  <span className="text-emerald-400 font-bold">● Active Cloud Sync</span>
-                ) : (
-                  <span className="text-white/20 font-bold">● Offline Local Sandbox</span>
-                )}
+                <div className="space-y-1.5 border-t border-white/5 pt-4">
+                  <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Firebase Web Config (JSON)</label>
+                  <textarea
+                    placeholder='{"apiKey": "AIzaSy...", "authDomain": "...", "projectId": "...", ...}'
+                    value={customFirebaseConfig}
+                    onChange={(e) => setCustomFirebaseConfig(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono resize-none h-44 placeholder:text-white/15 text-xs"
+                  />
+                  <span className="text-[10px] text-white/20 block mt-1.5 italic font-mono leading-normal">
+                    Leave completely empty and save to delete custom key bindings and return fully to local isolated execution.
+                  </span>
+                </div>
+
+                {/* State check */}
+                <div className="flex items-center gap-2 text-[9px] font-mono uppercase tracking-widest bg-[#0A0A0A] p-3 rounded-none border border-white/5">
+                  <span className="text-white/40">Sync Toggle Status:</span>
+                  {customFirebaseActive ? (
+                    <span className="text-emerald-400 font-bold">● Active Cloud Sync</span>
+                  ) : (
+                    <span className="text-white/20 font-bold">● Offline Local Sandbox</span>
+                  )}
+                </div>
+              </form>
+            ) : (
+              <div className="p-6 space-y-4 text-xs font-mono overflow-y-auto">
+                <div className="bg-black/50 p-4 border border-white/5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Dashboard Version</span>
+                    <span className="text-emerald-400 font-bold text-xs bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/20">v0.1.0</span>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Application Name</span>
+                    <span className="text-white/80">Cockpit Applet Dashboard</span>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Dev Host</span>
+                    <span className="text-white/80">0.0.0.0:3000 (Express)</span>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Sandbox Platform</span>
+                    <span className="text-white/80">Vite + React (HMR Disabled)</span>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Storage Size</span>
+                    <span className="text-white/80">{(JSON.stringify(localStorage).length / 1024).toFixed(2)} KB</span>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Registered Applets</span>
+                    <span className="text-white/80">{applets.length} Registered ({applets.filter(a => a.isCustom).length} Custom)</span>
+                  </div>
+                </div>
+
+                <div className="bg-black/20 p-4 border border-white/5 rounded-none space-y-2.5">
+                  <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Backend Connection Status</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${customBackendUrl ? 'bg-indigo-400' : 'bg-emerald-400'} animate-pulse`} />
+                    <span className="text-white font-medium text-[11px]">
+                      {customBackendUrl ? 'Remote Express Node' : 'Direct Sandbox Node'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-white/40 leading-relaxed font-sans font-medium">
+                    {customBackendUrl 
+                      ? `Requests are proxied to your remote container: ${customBackendUrl}. Live TSX compilation and AI features execute remote file actions.`
+                      : 'Running inside the safe local sandbox container. The integrated Express server (port 3000) handles compilation, AI interactions, and file management.'}
+                  </p>
+                </div>
+
+                <div className="bg-[#1A1A1A] p-4 border border-white/10 text-center rounded-none font-bold text-white text-[10px] tracking-widest uppercase">
+                  ALL SYSTEMS OPERATIONAL
+                </div>
               </div>
-            </form>
+            )}
 
             <div className="border-t border-white/5 p-6 bg-[#0A0A0A] flex justify-end gap-3 shrink-0">
               <button
@@ -3101,13 +3199,15 @@ export default function App() {
               >
                 Close
               </button>
-              <button
-                type="button"
-                onClick={handleSaveCustomFirebaseSettings}
-                className="px-6 py-2.5 text-[10px] font-bold uppercase tracking-widest bg-white text-black hover:bg-neutral-200 rounded-none cursor-pointer"
-              >
-                Assign Config Settings
-              </button>
+              {settingsTab === 'storage' && (
+                <button
+                  type="button"
+                  onClick={handleSaveCustomFirebaseSettings}
+                  className="px-6 py-2.5 text-[10px] font-bold uppercase tracking-widest bg-white text-black hover:bg-neutral-200 rounded-none cursor-pointer"
+                >
+                  Assign Config Settings
+                </button>
+              )}
             </div>
           </div>
         </div>
