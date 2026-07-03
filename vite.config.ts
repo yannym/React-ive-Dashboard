@@ -1,12 +1,33 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
     base: './',
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      {
+        name: 'copy-raw-components',
+        closeBundle() {
+          const srcDir = path.resolve(__dirname, 'src/components');
+          const destDir = path.resolve(__dirname, 'dist/src/components');
+          if (fs.existsSync(srcDir)) {
+            fs.mkdirSync(destDir, { recursive: true });
+            const files = fs.readdirSync(srcDir);
+            for (const file of files) {
+              if (file.endsWith('.tsx')) {
+                fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
+              }
+            }
+            console.log('Copied raw TSX components to dist/src/components/ for client-side compilation');
+          }
+        }
+      }
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

@@ -35,66 +35,76 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
 
   // Load the dynamic component if not present in pre-bundled map or when reloadKey changes
   useEffect(() => {
-    if (matchedPath && reloadKey === 0) {
-      // If found in Vite's pre-bundle map and we haven't requested a reload, we don't need the fallback
-      setCompiledComponent(null);
-      setCompileError(null);
-      return;
-    }
-
-    setIsLoading(true);
+  if (matchedPath && reloadKey === 0) {
+    setCompiledComponent(null);
     setCompileError(null);
-    setFixStatus({ type: 'idle', msg: '' });
+    return;
+  }
 
-    fetch(`/api/compile-component/${encodeURIComponent(componentName)}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `Failed to fetch compilation (HTTP ${res.status})`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (!data.success || !data.code) {
-          throw new Error('Server returned empty compile payload.');
-        }
+  setIsLoading(true);
+  setCompileError(null);
 
-        // Setup a sandboxed custom require map to pass context
-        const customRequire = (moduleName: string) => {
-          const name = moduleName.toLowerCase();
-          if (name === 'react') return React;
-          if (name === 'react-dom') return (window as any).ReactDOM || React;
-          if (name === 'lucide-react') return LucideIcons;
-          if (name === 'motion' || name === 'motion/react' || name === 'framer-motion') return MotionReact;
-          
-          // Try to look on window object
-          if ((window as any)[moduleName]) return (window as any)[moduleName];
-          
-          throw new Error(`Module "${moduleName}" is not pre-installed in the dashboard sandbox.`);
-        };
+  // 1. Fetch the raw TSX code (either from a static asset, Firestore, or LocalStorage)
+  const sourceUrl = `./src/components/${componentName}.tsx`;
+  
+  fetch(sourceUrl)
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx`);
+      return res.text();
+    })
+    .then(async (rawCode) => {
+      // 2. Dynamically load the Babel compiler script if not already loaded
+      if (!(window as any).Babel) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/@babel/standalone/babel.min.js';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Failed to load in-browser compiler (Babel)'));
+          document.head.appendChild(script);
+        });
+      }
 
-        const exports: any = {};
-        const module = { exports };
-
-        // Evaluate the compiled code
-        const evaluator = new Function('require', 'module', 'exports', data.code);
-        evaluator(customRequire, module, exports);
-
-        const Component = module.exports.default || module.exports;
-        if (typeof Component !== 'function' && typeof Component !== 'object') {
-          throw new Error('Compiled bundle did not export a valid React component (default export or module.exports is required).');
-        }
-
-        setCompiledComponent(() => Component);
-      })
-      .catch((err: any) => {
-        console.error('Dynamic loader failed:', err);
-        setCompileError(err.message || 'An unknown compilation or evaluation error occurred');
-      })
-      .finally(() => {
-        setIsLoading(false);
+      // 3. Compile/Transpile TSX -> JS inside the browser!
+      const result = (window as any).Babel.transform(rawCode, {
+        presets: ['react', 'typescript'],
+        filename: `${componentName}.tsx` // Required for TSX parser
       });
-  }, [componentName, matchedPath, reloadKey]);
+
+      const transpiledCode = result.code;
+
+      // 4. Setup sandboxed require map just like your server-based compiler did
+      const customRequire = (moduleName: string) => {
+        const name = moduleName.toLowerCase();
+        if (name === 'react') return React;
+        if (name === 'react-dom') return (window as any).ReactDOM || React;
+        if (name === 'lucide-react') return LucideIcons;
+        if (name === 'motion' || name === 'motion/react' || name === 'framer-motion') return MotionReact;
+        if ((window as any)[moduleName]) return (window as any)[moduleName];
+        throw new Error(`Module "${moduleName}" is not pre-installed in the dashboard sandbox.`);
+      };
+
+      const exports: any = {};
+      const module = { exports };
+
+      // 5. Evaluate the browser-transpiled CommonJS code
+      const evaluator = new Function('require', 'module', 'exports', transpiledCode);
+      evaluator(customRequire, module, exports);
+
+      const Component = module.exports.default || module.exports;
+      if (typeof Component !== 'function' && typeof Component !== 'object') {
+        throw new Error('Compiled bundle did not export a valid React component.');
+      }
+
+      setCompiledComponent(() => Component);
+    })
+    .catch((err: any) => {
+      console.error('Dynamic browser-loader failed:', err);
+      setCompileError(err.message || 'An error occurred during client-side compilation.');
+    })
+    .finally(() => {
+      setIsLoading(false);
+    });
+}, [componentName, matchedPath, reloadKey]);
 
   // Utility to copy error to clipboard
   const copyErrorToClipboard = () => {
