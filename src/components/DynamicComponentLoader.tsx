@@ -2,7 +2,7 @@ import React, { Suspense, useState, useEffect, useMemo } from 'react';
 import { AlertTriangle, Copy, Check, Wrench, RefreshCw, FileText, Sparkles } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import * as MotionReact from 'motion/react';
-import { readFile } from '../lib/filesystem';
+import { readFile, writeFile } from '../lib/filesystem';
 
 // Grab all pre-built .tsx files from /src/components directory dynamically for instant loading
 const componentsMap = (import.meta as any).glob('/src/components/*.tsx');
@@ -113,6 +113,7 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
       try {
         const result = (window as any).Babel.transform(rawCode, {
           presets: ['react', 'typescript'],
+          plugins: ['transform-modules-commonjs'],
           filename: `${componentName}.tsx` // Required for TSX parser
         });
         transpiledCode = result.code;
@@ -180,18 +181,8 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
     setIsFixing(true);
     setFixStatus({ type: 'idle', msg: '' });
     try {
-      const readRes = await fetch('/api/files/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: `src/components/${componentName}.tsx` })
-      });
-
-      if (!readRes.ok) {
-        throw new Error('Failed to read component source file. Please verify that the file exists in /src/components/');
-      }
-
-      const fileData = await readRes.json();
-      let code = fileData.content || '';
+      const readData = await readFile(`src/components/${componentName}.tsx`);
+      let code = readData.content || '';
       const appliedFixes: string[] = [];
 
       // 1. Fix capitalized "React" import
@@ -235,18 +226,7 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
       }
 
       // Save the fixed file back
-      const writeRes = await fetch('/api/files/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: `src/components/${componentName}.tsx`,
-          content: code
-        })
-      });
-
-      if (!writeRes.ok) {
-        throw new Error('Failed to write changes back to the workspace file system.');
-      }
+      await writeFile(`src/components/${componentName}.tsx`, code);
 
       setFixStatus({
         type: 'success',

@@ -550,7 +550,18 @@ async function startServer() {
 
     } catch (err: any) {
       console.error("Gemini Copilot route error:", err);
-      res.status(500).json({ error: err.message || "Gemini route error" });
+      let errorMessage = err.message || "Gemini route error";
+      const errString = typeof err === 'object' ? JSON.stringify(err) : String(err);
+      if (
+        errorMessage.includes("429") || 
+        errorMessage.includes("RESOURCE_EXHAUSTED") || 
+        errorMessage.includes("quota") ||
+        errString.includes("429") ||
+        errString.includes("RESOURCE_EXHAUSTED")
+      ) {
+        errorMessage = "Gemini API free-tier quota exceeded. The shared API key has reached its rate limits. Please wait about 60 seconds and try again, or configure your own custom backend server / Gemini credentials.";
+      }
+      res.status(500).json({ error: errorMessage });
     }
   });
 
