@@ -47,14 +47,40 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
   const addLog = (window as any).addSystemLog || (() => {});
   addLog('info', 'compiler', `Babel on-the-fly compiler: Compiling "${componentName}.tsx" client-side...`);
 
-  // 1. Fetch the raw TSX code (either from a static asset, Firestore, or LocalStorage)
+  // 1. Retrieve the raw TSX code (either from LocalStorage cache, synced list, or static asset)
   const sourceUrl = `./src/components/${componentName}.tsx`;
   
-  fetch(sourceUrl)
-    .then(async (res) => {
-      if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx from server (HTTP ${res.status}: ${res.statusText})`);
-      return res.text();
-    })
+  // Tier A: Check dedicated custom_component_code cache in localStorage
+  let resolvedCode = localStorage.getItem(`custom_component_code:${componentName}`);
+  
+  // Tier B: Check if embedded in synced applets array in localStorage
+  if (!resolvedCode) {
+    try {
+      const storedApplets = localStorage.getItem('applet_dashboard_configs');
+      if (storedApplets) {
+        const appletsList = JSON.parse(storedApplets);
+        const matchingApplet = appletsList.find((a: any) => 
+          a.url === `internal:component:${componentName}` || 
+          a.name?.toLowerCase() === componentName.toLowerCase()
+        );
+        if (matchingApplet?.sourceCode) {
+          resolvedCode = matchingApplet.sourceCode;
+          addLog('info', 'compiler', `Resolved TSX source code for "${componentName}" from synced metadata.`);
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading source code from applet configs cache:', e);
+    }
+  }
+
+  const loadSourcePromise = resolvedCode 
+    ? Promise.resolve(resolvedCode)
+    : fetch(sourceUrl).then(async (res) => {
+        if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx from server (HTTP ${res.status}: ${res.statusText})`);
+        return res.text();
+      });
+
+  loadSourcePromise
     .then(async (rawCode) => {
       addLog('info', 'compiler', `Fetched source for "${componentName}.tsx". Preparing in-browser Babel compiler...`, `Source length: ${rawCode.length} characters.`);
       // 2. Dynamically load the Babel compiler script if not already loaded

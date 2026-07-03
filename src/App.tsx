@@ -1246,52 +1246,82 @@ export default function App() {
     }
   };
 
-  // Secure Back-End TSX Applet Compiler Connector
+  // Secure Back-End TSX Applet Compiler Connector with Client-Side Fallback
   const handleUploadTsx = async (fileName: string, fileContent: string) => {
     setUploading(true);
     setUploadError(null);
     addSystemLog('info', 'uploader', `Starting upload/save flow for custom component: ${fileName}`, `Payload size: ${fileContent.length} characters.`);
     try {
-      const response = await fetch('/api/upload-applet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: fileName, content: fileContent })
-      });
+      const compName = fileName.replace(/\.tsx$/, '');
+      let uploadSuccess = false;
+      let appletMetadata: any = null;
 
-      let responseData: any;
-      const contentType = response.headers.get("content-type");
-      
-      if (contentType && contentType.includes("application/json")) {
-        responseData = await response.json().catch(() => null);
-      }
-      
-      if (!responseData) {
-        const responseText = await response.text().catch(() => '');
-        responseData = {
-          success: response.ok,
-          error: `HTTP ${response.status}: ${response.statusText}`,
-          rawText: responseText
-        };
-      }
+      // 1. Attempt server-side compilation first (if available)
+      try {
+        const response = await fetch('/api/upload-applet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: fileName, content: fileContent })
+        });
 
-      if (!response.ok) {
-        const errorMsg = responseData.error || 'Failed to upload custom React component.';
-        const details = responseData.rawText || JSON.stringify(responseData, null, 2);
+        let responseData: any;
+        const contentType = response.headers.get("content-type");
         
-        addSystemLog('error', 'uploader', `Upload API returned status ${response.status}: ${errorMsg}`, details);
-        
-        if (responseData.rawText && responseData.rawText.trim().startsWith('<')) {
-          throw new Error(`The backend server returned an HTML page (Status ${response.status}) instead of JSON. This typically happens if you are running in a static client-only hosting environment like GitHub Pages where the Express server endpoints are not available, or if the server is offline. Open the "System Diagnostic Logs" to inspect the raw HTML.`);
-        } else {
-          throw new Error(errorMsg);
+        if (contentType && contentType.includes("application/json")) {
+          responseData = await response.json().catch(() => null);
         }
+        
+        if (!responseData) {
+          const responseText = await response.text().catch(() => '');
+          responseData = {
+            success: response.ok,
+            error: `HTTP ${response.status}: ${response.statusText}`,
+            rawText: responseText
+          };
+        }
+
+        if (response.ok && responseData.success) {
+          uploadSuccess = true;
+          appletMetadata = responseData.applet;
+        } else {
+          addSystemLog('warn', 'uploader', `Server-side upload returned non-ok status (${response.status}): ${responseData.error || 'Server error'}`);
+        }
+      } catch (fetchErr: any) {
+        addSystemLog('warn', 'uploader', `Server upload endpoint not reachable (network error or static environment like GitHub Pages). Initiating local storage fallback...`);
       }
 
-      const result = responseData;
-      if (result.success) {
-        // Automatically append to locally active array listings
+      // 2. Client-side local persistence fallback if server upload failed
+      if (!uploadSuccess) {
+        addSystemLog('info', 'uploader', `Activating client-side dynamic sandbox registration for "${fileName}"...`);
+        
+        appletMetadata = {
+          id: `applet-${compName.toLowerCase()}-${Date.now()}`,
+          name: compName,
+          description: `Custom React Component dynamic fallback compiler (${fileName}).`,
+          url: `internal:component:${compName}`,
+          isCustomEmbed: false,
+          icon: '🤖',
+          category: 'Creativity',
+          tags: ['Custom', 'React', 'Dynamic'],
+          openMode: 'iframe',
+          accentColor: 'indigo',
+          isPinned: false,
+          ownerId: currentUser?.uid || 'anonymous',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          sourceCode: fileContent
+        };
+        uploadSuccess = true;
+      }
+
+      // 3. Complete the applet registration
+      if (uploadSuccess && appletMetadata) {
+        // Cache code to localStorage under unique key
+        localStorage.setItem(`custom_component_code:${compName}`, fileContent);
+
         const newApplet: Applet = {
-          ...result.applet,
+          ...appletMetadata,
+          sourceCode: fileContent, // always bundle source code so it is synchronized
           orderIndex: applets.length
         };
 
@@ -1303,13 +1333,14 @@ export default function App() {
         if (connectionType === 'cloud' && currentUser && activeDb) {
           try {
             await setDoc(doc(activeDb, 'applets', newApplet.id), newApplet);
+            addSystemLog('success', 'database', `Successfully synced custom TSX metadata and source code for "${compName}" to Firestore.`);
           } catch (err: any) {
             console.error('Firestore upload mapping rejected:', err);
             addSystemLog('warn', 'database', `Firestore applet registration rejected: ${err.message}`);
           }
         }
 
-        addSystemLog('success', 'uploader', `Successfully compiled, registered and registered ${fileName}!`, JSON.stringify(result.applet, null, 2));
+        addSystemLog('success', 'uploader', `Successfully compiled and registered ${fileName}!`, JSON.stringify(newApplet, null, 2));
 
         setActiveApplet(newApplet);
         setShowUploadModal(false);

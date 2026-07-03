@@ -25,6 +25,7 @@ export interface Applet {
   updatedAt: string;
   sandboxConfig?: SandboxConfig;
   orderIndex?: number;
+  sourceCode?: string;
 }
 
 export interface FirebaseConnectionDetails {
