@@ -53,6 +53,7 @@ import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { AppletErrorBoundary } from './components/AppletErrorBoundary';
 import { TiledWorkspace } from './components/TiledWorkspace';
 import { SystemConsoleModal } from './components/SystemConsoleModal';
+import { GeminiCopilot } from './components/GeminiCopilot';
 import { 
   db, 
   auth, 
@@ -4043,6 +4044,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <GeminiCopilot
+        onWorkspaceChange={() => scanAndSyncDynamicComponents(applets)}
+        addSystemLog={addSystemLog}
+        appletsCount={applets.length}
+      />
 
     </div>
   );

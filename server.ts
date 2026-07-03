@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import * as esbuild from "esbuild";
+import { GoogleGenAI, Type } from "@google/genai";
 
 async function startServer() {
   const app = express();
@@ -319,6 +320,224 @@ async function startServer() {
       res.json({ success: true, message: `Successfully deleted: ${relativePath}` });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || "Failed to delete target." });
+    }
+  });
+
+  // ==================== GEMINI AI COPILOT ENDPOINT ====================
+  const listFilesDeclaration = {
+    name: "listFiles",
+    description: "Lists all files and directories inside a given directory, relative to the workspace root.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        path: {
+          type: Type.STRING,
+          description: "The directory path to list, relative to the workspace root, e.g. '.', 'src', or 'src/components'."
+        }
+      }
+    }
+  };
+
+  const readFileDeclaration = {
+    name: "readFile",
+    description: "Reads the content of a file, relative to the workspace root, and returns it as a string.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        path: {
+          type: Type.STRING,
+          description: "The path of the file to read, e.g. 'src/components/HelloWorld.tsx'."
+        }
+      },
+      required: ["path"]
+    }
+  };
+
+  const writeFileDeclaration = {
+    name: "writeFile",
+    description: "Writes content to a file, relative to the workspace root. Use this to create or edit React TSX components or other files.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        path: {
+          type: Type.STRING,
+          description: "The path of the file to save/write, e.g. 'src/components/CoolComponent.tsx'."
+        },
+        content: {
+          type: Type.STRING,
+          description: "The complete file text content. If writing a React component, ensure it has a default export."
+        }
+      },
+      required: ["path", "content"]
+    }
+  };
+
+  const listFilesHelper = (targetPath: string = ".") => {
+    try {
+      const safePath = getSafePath(targetPath);
+      if (!fs.existsSync(safePath)) return { error: "Path does not exist" };
+      const stats = fs.statSync(safePath);
+      if (!stats.isDirectory()) return { error: "Path is a file, not a directory" };
+      const items = fs.readdirSync(safePath);
+      return {
+        success: true,
+        path: targetPath,
+        contents: items.filter(item => item !== "node_modules" && item !== ".git" && item !== "dist" && item !== ".cache")
+      };
+    } catch (e: any) {
+      return { error: e.message || "Failed to list directory" };
+    }
+  };
+
+  const readFileHelper = (targetPath: string) => {
+    try {
+      const safePath = getSafePath(targetPath);
+      if (!fs.existsSync(safePath)) return { error: "File not found" };
+      const stats = fs.statSync(safePath);
+      if (stats.isDirectory()) return { error: "Path is a directory, not a file" };
+      const content = fs.readFileSync(safePath, "utf8");
+      return { success: true, path: targetPath, content };
+    } catch (e: any) {
+      return { error: e.message || "Failed to read file" };
+    }
+  };
+
+  const writeFileHelper = (targetPath: string, content: string) => {
+    try {
+      const safePath = getSafePath(targetPath);
+      const parentDir = path.dirname(safePath);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      fs.writeFileSync(safePath, content, "utf8");
+      return { success: true, path: targetPath, message: "File saved successfully." };
+    } catch (e: any) {
+      return { error: e.message || "Failed to write file" };
+    }
+  };
+
+  app.post("/api/gemini/chat", async (req, res) => {
+    try {
+      const { message, history, useTools } = req.body;
+      
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({ 
+          error: "GEMINI_API_KEY environment variable is not configured. Please add it in Settings > Secrets." 
+        });
+      }
+
+      if (!message) {
+        return res.status(400).json({ error: "Message is required." });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          }
+        }
+      });
+
+      const systemInstruction = 
+        "You are 'Gemini Copilot', an expert AI coding and system workspace assistant embedded in the Applet Cockpit Dashboard.\n" +
+        "You run inside a server-side container with access to workspace tools. " +
+        "If the user asks you to create or modify a custom React applet/component, save it to 'src/components/MyComponent.tsx' (or whatever filename makes sense). Always write valid TSX. Every custom component MUST use a default export (e.g., 'export default function MyComponent() { ... }').\n" +
+        "Do not explain your tools usage in long detail, just list files, read code, make edits, and then give a concise, helpful summary to the user. You are brilliant, fast, and helpful.";
+
+      const tools: any[] = [];
+      if (useTools) {
+        tools.push({
+          functionDeclarations: [listFilesDeclaration, readFileDeclaration, writeFileDeclaration]
+        });
+      }
+
+      const contents: any[] = [];
+      if (history && Array.isArray(history)) {
+        history.forEach((h: any) => {
+          contents.push({
+            role: h.role === "assistant" ? "model" : "user",
+            parts: [{ text: h.content }]
+          });
+        });
+      }
+
+      contents.push({
+        role: "user",
+        parts: [{ text: message }]
+      });
+
+      let loopCount = 0;
+      let finalResponseText = "";
+      let lastResponse: any = null;
+
+      while (loopCount < 8) {
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents,
+          config: {
+            systemInstruction,
+            tools: tools.length > 0 ? tools : undefined,
+          }
+        });
+
+        lastResponse = response;
+        const functionCalls = response.functionCalls;
+
+        if (!functionCalls || functionCalls.length === 0) {
+          finalResponseText = response.text || "";
+          break;
+        }
+
+        contents.push(response.candidates?.[0]?.content);
+
+        const functionResponses: any[] = [];
+        for (const fc of functionCalls) {
+          let result: any = null;
+          try {
+            if (fc.name === "listFiles") {
+              const args = fc.args as any;
+              result = listFilesHelper(args?.path || ".");
+            } else if (fc.name === "readFile") {
+              const args = fc.args as any;
+              result = readFileHelper(args?.path);
+            } else if (fc.name === "writeFile") {
+              const args = fc.args as any;
+              result = writeFileHelper(args?.path, args?.content);
+            } else {
+              result = { error: `Function '${fc.name}' is not supported.` };
+            }
+          } catch (err: any) {
+            result = { error: err.message || "Failed execution" };
+          }
+
+          functionResponses.push({
+            response: result
+          });
+        }
+
+        contents.push({
+          role: "tool",
+          parts: functionResponses.map((res, i) => ({
+            functionResponse: {
+              name: functionCalls[i].name,
+              response: res.response
+            }
+          }))
+        });
+
+        loopCount++;
+      }
+
+      res.json({
+        success: true,
+        text: finalResponseText || lastResponse?.text || "Task executed."
+      });
+
+    } catch (err: any) {
+      console.error("Gemini Copilot route error:", err);
+      res.status(500).json({ error: err.message || "Gemini route error" });
     }
   });
 
