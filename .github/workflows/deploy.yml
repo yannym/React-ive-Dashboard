@@ -30,14 +30,23 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build client assets
-        run: npx vite build
+        run: npx vite build --outDir dist
+
+      - name: Inspect build output
+        run: |
+          echo "=== dist top-level listing ==="
+          ls -la ./dist || true
+          echo "=== Dist file tree (maxdepth 3) ==="
+          find ./dist -maxdepth 3 -type f -print || true
+          echo "=== Check for index.html at dist root ==="
+          if [ -f ./dist/index.html ]; then echo "index.html found"; else echo "ERROR: index.html NOT found in ./dist"; exit 1; fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

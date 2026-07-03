@@ -13,8 +13,8 @@ export default defineConfig(() => {
       {
         name: 'copy-raw-components',
         closeBundle() {
-          const srcDir = path.resolve(__dirname, 'src/components');
-          const destDir = path.resolve(__dirname, 'dist/src/components');
+          const srcDir = path.resolve(process.cwd(), 'src/components');
+          const destDir = path.resolve(process.cwd(), 'dist/src/components');
           if (fs.existsSync(srcDir)) {
             fs.mkdirSync(destDir, { recursive: true });
             const files = fs.readdirSync(srcDir);
@@ -30,7 +30,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(process.cwd(), '.'),
       },
     },
     server: {
