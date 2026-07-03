@@ -2,6 +2,7 @@ import React, { Suspense, useState, useEffect, useMemo } from 'react';
 import { AlertTriangle, Copy, Check, Wrench, RefreshCw, FileText, Sparkles } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import * as MotionReact from 'motion/react';
+import { readFile } from '../lib/filesystem';
 
 // Grab all pre-built .tsx files from /src/components directory dynamically for instant loading
 const componentsMap = (import.meta as any).glob('/src/components/*.tsx');
@@ -75,10 +76,15 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
 
   const loadSourcePromise = resolvedCode 
     ? Promise.resolve(resolvedCode)
-    : fetch(sourceUrl).then(async (res) => {
-        if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx from server (HTTP ${res.status}: ${res.statusText})`);
-        return res.text();
-      });
+    : readFile(`src/components/${componentName}.tsx`)
+        .then(res => res.content)
+        .catch(() => {
+          addLog('warn', 'compiler', `Failed virtual file read for "${componentName}.tsx". Falling back to static assets fetch...`);
+          return fetch(sourceUrl).then(async (res) => {
+            if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx from server (HTTP ${res.status}: ${res.statusText})`);
+            return res.text();
+          });
+        });
 
   loadSourcePromise
     .then(async (rawCode) => {

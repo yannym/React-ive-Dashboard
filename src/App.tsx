@@ -54,6 +54,7 @@ import { AppletErrorBoundary } from './components/AppletErrorBoundary';
 import { TiledWorkspace } from './components/TiledWorkspace';
 import { SystemConsoleModal } from './components/SystemConsoleModal';
 import { GeminiCopilot } from './components/GeminiCopilot';
+import { listFiles, readFile, writeFile, deleteFile } from './lib/filesystem';
 import { 
   db, 
   auth, 
@@ -405,12 +406,7 @@ export default function App() {
     setFsLoading(true);
     setFsError(null);
     try {
-      const resp = await fetch(`/api/files/list?path=${encodeURIComponent(subPath)}`);
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
-        throw new Error(errData.error || 'Failed to list directory contents.');
-      }
-      const data = await resp.json();
+      const data = await listFiles(subPath);
       if (data.success) {
         setFsItems(data.contents || []);
         setFsCurrentPath(data.currentPath || subPath);
@@ -428,16 +424,7 @@ export default function App() {
     setFsFileLoading(true);
     setFsError(null);
     try {
-      const resp = await fetch('/api/files/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath })
-      });
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
-        throw new Error(errData.error || 'Failed to read file contents.');
-      }
-      const data = await resp.json();
+      const data = await readFile(filePath);
       if (data.success) {
         setFsSelectedFilePath(filePath);
         setFsFileContent(data.content || '');
@@ -456,16 +443,7 @@ export default function App() {
     setFsSaving(true);
     setFsError(null);
     try {
-      const resp = await fetch('/api/files/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fsSelectedFilePath, content: fsFileContent })
-      });
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
-        throw new Error(errData.error || 'Failed to save changes.');
-      }
-      const data = await resp.json();
+      const data = await writeFile(fsSelectedFilePath, fsFileContent);
       if (data.success) {
         triggerToast('File saved successfully.', 'success');
         addSystemLog('success', 'fs', `Saved file "${fsSelectedFilePath}" successfully (${fsFileContent?.length || 0} characters).`);
@@ -499,28 +477,26 @@ export default function App() {
         
         try {
           // Read content to archive it in trash
-          const readResp = await fetch('/api/files/read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath })
-          });
-          if (readResp.ok) {
-            const readData = await readResp.json();
+          // Read content to archive it in trash
+          try {
+            const readData = await readFile(filePath);
             if (readData.success) {
               associatedFile = {
                 path: filePath,
                 content: readData.content || ''
               };
             }
+          } catch (err) {
+            console.warn('Failed to read physical file during trashing:', err);
           }
           
           // Physically delete the file
-          await fetch('/api/files/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: filePath })
-          });
-          console.log(`Archived and physically deleted component file for trash: ${filePath}`);
+          try {
+            await deleteFile(filePath);
+            console.log(`Archived and physically deleted component file for trash: ${filePath}`);
+          } catch (err) {
+            console.warn('Failed to delete physical file during trashing:', err);
+          }
         } catch (err) {
           console.error('Failed to read/delete physical file during trashing:', err);
         }
@@ -594,30 +570,19 @@ export default function App() {
 
       if (!isDirectory) {
         // Read file contents
-        const resp = await fetch('/api/files/read', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: filePath })
-        });
-        if (resp.ok) {
-          const data = await resp.json();
+        try {
+          const data = await readFile(filePath);
           if (data.success) {
             content = data.content || '';
             size = content.length;
           }
+        } catch (err) {
+          console.warn('Could not read file contents during trashing:', err);
         }
       }
 
       // Call physical delete API
-      const delResp = await fetch('/api/files/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath })
-      });
-      if (!delResp.ok) {
-        const errData = await delResp.json();
-        throw new Error(errData.error || 'Failed to physically delete file.');
-      }
+      await deleteFile(filePath);
 
       // Add to trashBin files
       const newTrashedFile: TrashedFile = {
@@ -653,18 +618,11 @@ export default function App() {
     try {
       // 1. If there's an associated file, recreate it
       if (trashed.associatedFile) {
-        const writeResp = await fetch('/api/files/write', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            path: trashed.associatedFile.path,
-            content: trashed.associatedFile.content
-          })
-        });
-        if (!writeResp.ok) {
-          console.warn('Failed to restore associated component file:', trashed.associatedFile.path);
-        } else {
+        try {
+          await writeFile(trashed.associatedFile.path, trashed.associatedFile.content);
           await handleFetchFsItems(fsCurrentPath);
+        } catch (err) {
+          console.warn('Failed to restore associated component file:', trashed.associatedFile.path, err);
         }
       }
 
@@ -707,30 +665,9 @@ export default function App() {
   const handleRestoreFile = async (trashed: TrashedFile) => {
     try {
       if (trashed.isDirectory) {
-        const writeResp = await fetch('/api/files/write', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            path: `${trashed.path}/.keep`,
-            content: ''
-          })
-        });
-        if (!writeResp.ok) {
-          throw new Error('Failed to recreate directory structure.');
-        }
+        await writeFile(`${trashed.path}/.keep`, '');
       } else {
-        const writeResp = await fetch('/api/files/write', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            path: trashed.path,
-            content: trashed.content
-          })
-        });
-        if (!writeResp.ok) {
-          const errData = await writeResp.json();
-          throw new Error(errData.error || 'Failed to write restored file.');
-        }
+        await writeFile(trashed.path, trashed.content);
       }
 
       // Remove from trashBin
@@ -3325,12 +3262,7 @@ export default function App() {
                   const trimmed = input.value.trim();
                   if (!trimmed) return;
                   const filePath = fsCurrentPath === '.' ? trimmed : `${fsCurrentPath}/${trimmed}`;
-                  fetch('/api/files/write', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: filePath, content: '' })
-                  })
-                  .then(r => r.json())
+                  writeFile(filePath, '')
                   .then(data => {
                     if (data.success) {
                       triggerToast(`Created file: ${trimmed}`, 'success');
@@ -3338,7 +3270,7 @@ export default function App() {
                       handleFsReadFile(filePath);
                       input.value = '';
                     } else {
-                      triggerToast(data.error || 'Failed to create file', 'error');
+                      triggerToast('Failed to create file', 'error');
                     }
                   })
                   .catch(err => triggerToast(err.message, 'error'));
