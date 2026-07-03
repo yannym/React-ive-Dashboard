@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Sparkles, X, Send, Copy, Check, Server, Terminal, AlertTriangle } from "lucide-react";
+import { getBackendUrl } from "../lib/filesystem";
 
 interface GeminiCopilotProps {
   onWorkspaceChange: () => void;
@@ -26,7 +27,7 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
 
   // Check if Express backend is online on load
   useEffect(() => {
-    fetch("/api/list-components")
+    fetch(getBackendUrl("/api/list-components"))
       .then((res) => {
         setIsServerOnline(res.ok);
       })
@@ -69,7 +70,7 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
     try {
       addSystemLog("info", "copilot", `Sending instruction to Gemini Copilot...`, userText);
 
-      const response = await fetch("/api/gemini/chat", {
+      const response = await fetch(getBackendUrl("/api/gemini/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

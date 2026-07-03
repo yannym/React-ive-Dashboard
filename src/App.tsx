@@ -54,7 +54,7 @@ import { AppletErrorBoundary } from './components/AppletErrorBoundary';
 import { TiledWorkspace } from './components/TiledWorkspace';
 import { SystemConsoleModal } from './components/SystemConsoleModal';
 import { GeminiCopilot } from './components/GeminiCopilot';
-import { listFiles, readFile, writeFile, deleteFile } from './lib/filesystem';
+import { listFiles, readFile, writeFile, deleteFile, getBackendUrl } from './lib/filesystem';
 import { 
   db, 
   auth, 
@@ -864,6 +864,11 @@ export default function App() {
   const [customFirebaseActive, setCustomFirebaseActive] = useState<boolean>(() => {
     return localStorage.getItem('applet_dashboard_custom_fb_active') === 'true';
   });
+
+  // Dynamic pasting of user custom backend service container URL
+  const [customBackendUrl, setCustomBackendUrl] = useState<string>(() => {
+    return localStorage.getItem('applet_dashboard_custom_backend_url') || '';
+  });
   
   // Active dynamic custom firebase client references
   const [customDb, setCustomDb] = useState<any>(null);
@@ -1196,7 +1201,7 @@ export default function App() {
 
       // 1. Attempt server-side compilation first (if available)
       try {
-        const response = await fetch('/api/upload-applet', {
+        const response = await fetch(getBackendUrl('/api/upload-applet'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: fileName, content: fileContent })
@@ -1310,7 +1315,7 @@ export default function App() {
   // Automated Component discovery scanner
   const scanAndSyncDynamicComponents = async (currentApplets: Applet[]) => {
     try {
-      const resp = await fetch('/api/list-components');
+      const resp = await fetch(getBackendUrl('/api/list-components'));
       if (!resp.ok) return;
       const data = await resp.json();
       if (data.success && Array.isArray(data.components)) {
@@ -1543,31 +1548,44 @@ export default function App() {
     fileReader.readAsText(targetFile);
   };
 
-  // --- FIREBASE UI TOGGLER ---
+  // --- FIREBASE & BACKEND SETTINGS TOGGLER ---
   const handleSaveCustomFirebaseSettings = (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      // 1. Save Custom Backend URL if specified
+      const trimmedBackendUrl = customBackendUrl.trim();
+      if (trimmedBackendUrl === '') {
+        localStorage.removeItem('applet_dashboard_custom_backend_url');
+      } else {
+        if (!trimmedBackendUrl.startsWith('http://') && !trimmedBackendUrl.startsWith('https://')) {
+          triggerToast('Custom Backend URL must start with http:// or https://', 'error');
+          return;
+        }
+        localStorage.setItem('applet_dashboard_custom_backend_url', trimmedBackendUrl);
+      }
+
+      // 2. Save Custom Firebase Config if specified
       if (customFirebaseConfig.trim() === '') {
         localStorage.removeItem('applet_dashboard_custom_fb_config');
         localStorage.removeItem('applet_dashboard_custom_fb_active');
         setCustomFirebaseActive(false);
         setCustomDb(null);
         setCustomAuth(null);
-        triggerToast('Custom Firebase configuration deleted. System defaults back to sandbox environments.', 'info');
-        return;
+      } else {
+        // Try validate string
+        JSON.parse(customFirebaseConfig);
+        localStorage.setItem('applet_dashboard_custom_fb_config', customFirebaseConfig);
+        localStorage.setItem('applet_dashboard_custom_fb_active', 'true');
+        setCustomFirebaseActive(true);
       }
-      
-      // Try validate string
-      JSON.parse(customFirebaseConfig);
-      
-      localStorage.setItem('applet_dashboard_custom_fb_config', customFirebaseConfig);
-      localStorage.setItem('applet_dashboard_custom_fb_active', 'true');
-      setCustomFirebaseActive(true);
+
       setShowSettingsModal(false);
-      triggerToast('Settings changed. Refreshing nodes...', 'success');
-      window.location.reload();
+      triggerToast('Settings saved successfully. Refreshing environment...', 'success');
+      setTimeout(() => {
+        window.location.reload();
+      }, 800);
     } catch (err: any) {
-      triggerToast(`Invalid configuration formatting: Code must be standard valid JSON.\nError: ${err?.message}`, 'error');
+      triggerToast(`Invalid Firebase JSON configuration formatting: ${err?.message}`, 'error');
     }
   };
 
@@ -3037,7 +3055,21 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 border-t border-white/5 pt-4">
+                <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Backend Service Container URL</label>
+                <input
+                  type="text"
+                  placeholder="https://my-express-backend.render.com"
+                  value={customBackendUrl}
+                  onChange={(e) => setCustomBackendUrl(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
+                />
+                <span className="text-[10px] text-white/30 block leading-normal font-mono">
+                  Enter your self-hosted backend container URL (e.g. deployed to Cloud Run, Render, Railway, or running locally via ngrok). This lets your GitHub Pages build execute the Gemini Assistant, read/write files, and compile components live!
+                </span>
+              </div>
+
+              <div className="space-y-1.5 border-t border-white/5 pt-4">
                 <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Firebase Web Config (JSON)</label>
                 <textarea
                   placeholder='{"apiKey": "AIzaSy...", "authDomain": "...", "projectId": "...", ...}'

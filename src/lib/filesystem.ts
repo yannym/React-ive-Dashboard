@@ -65,15 +65,30 @@ export function isStaticHost(): boolean {
   );
 }
 
+/**
+ * Helper to resolve the correct URL for backend API requests.
+ * If the user has configured a custom backend URL in Settings (saved in localStorage),
+ * we rewrite the API request to go to that remote server (e.g. https://my-backend-server.com/api/...)
+ */
+export function getBackendUrl(apiPath: string): string {
+  const customUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
+  if (customUrl && customUrl.trim().startsWith("http")) {
+    const baseUrl = customUrl.trim().replace(/\/$/, ""); // strip trailing slash
+    const relativePath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+    return `${baseUrl}${relativePath}`;
+  }
+  return apiPath;
+}
+
 // Keep track of sticky server health state
 let stickyFallbackMode: boolean | null = null;
 
 export async function detectFallbackMode(): Promise<boolean> {
-  if (isStaticHost()) return true;
+  if (isStaticHost() && !localStorage.getItem("applet_dashboard_custom_backend_url")) return true;
   if (stickyFallbackMode !== null) return stickyFallbackMode;
 
   try {
-    const testResp = await fetch("/api/list-components", { signal: AbortSignal.timeout(1500) });
+    const testResp = await fetch(getBackendUrl("/api/list-components"), { signal: AbortSignal.timeout(1500) });
     stickyFallbackMode = !testResp.ok;
   } catch (e) {
     stickyFallbackMode = true;
@@ -90,9 +105,9 @@ export async function listFiles(targetPath: string = "."): Promise<{ success: bo
   const isFallback = await detectFallbackMode();
   const normalizedPath = targetPath === "" || targetPath === "." ? "." : targetPath;
 
-  if (!isFallback) {
+  if (!isFallback || localStorage.getItem("applet_dashboard_custom_backend_url")) {
     try {
-      const resp = await fetch(`/api/files/list?path=${encodeURIComponent(normalizedPath)}`);
+      const resp = await fetch(getBackendUrl(`/api/files/list?path=${encodeURIComponent(normalizedPath)}`));
       if (resp.ok) {
         const data = await resp.json();
         if (data.success) {
@@ -155,9 +170,9 @@ export async function listFiles(targetPath: string = "."): Promise<{ success: bo
  */
 export async function readFile(filePath: string): Promise<{ success: boolean; path: string; content: string }> {
   const isFallback = await detectFallbackMode();
-  if (!isFallback) {
+  if (!isFallback || localStorage.getItem("applet_dashboard_custom_backend_url")) {
     try {
-      const resp = await fetch("/api/files/read", {
+      const resp = await fetch(getBackendUrl("/api/files/read"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: filePath })
@@ -201,9 +216,9 @@ export async function writeFile(filePath: string, content: string): Promise<{ su
     }
   }
 
-  if (!isFallback) {
+  if (!isFallback || localStorage.getItem("applet_dashboard_custom_backend_url")) {
     try {
-      const resp = await fetch("/api/files/write", {
+      const resp = await fetch(getBackendUrl("/api/files/write"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: filePath, content })
@@ -230,9 +245,9 @@ export async function writeFile(filePath: string, content: string): Promise<{ su
  */
 export async function deleteFile(filePath: string): Promise<{ success: boolean; path: string }> {
   const isFallback = await detectFallbackMode();
-  if (!isFallback) {
+  if (!isFallback || localStorage.getItem("applet_dashboard_custom_backend_url")) {
     try {
-      const resp = await fetch("/api/files/delete", {
+      const resp = await fetch(getBackendUrl("/api/files/delete"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: filePath })
