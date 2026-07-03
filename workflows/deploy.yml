@@ -26,7 +26,7 @@ jobs:
 
       - name: Build Pure Static Frontend
         # npx vite build ignores the backend server bundle and outputs clean HTML/JS to 'dist'
-        run: npx vite build
+        run: npx run build
 
       - name: Deploy to 'live' branch
         uses: peaceiris/actions-gh-pages@v3
