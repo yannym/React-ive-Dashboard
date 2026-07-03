@@ -44,33 +44,51 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
   setIsLoading(true);
   setCompileError(null);
 
+  const addLog = (window as any).addSystemLog || (() => {});
+  addLog('info', 'compiler', `Babel on-the-fly compiler: Compiling "${componentName}.tsx" client-side...`);
+
   // 1. Fetch the raw TSX code (either from a static asset, Firestore, or LocalStorage)
   const sourceUrl = `./src/components/${componentName}.tsx`;
   
   fetch(sourceUrl)
     .then(async (res) => {
-      if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx`);
+      if (!res.ok) throw new Error(`Could not load source file ${componentName}.tsx from server (HTTP ${res.status}: ${res.statusText})`);
       return res.text();
     })
     .then(async (rawCode) => {
+      addLog('info', 'compiler', `Fetched source for "${componentName}.tsx". Preparing in-browser Babel compiler...`, `Source length: ${rawCode.length} characters.`);
       // 2. Dynamically load the Babel compiler script if not already loaded
       if (!(window as any).Babel) {
+        addLog('info', 'compiler', 'Loading @babel/standalone compiler script from unpkg CDN...');
         await new Promise<void>((resolve, reject) => {
           const script = document.createElement('script');
           script.src = 'https://unpkg.com/@babel/standalone/babel.min.js';
-          script.onload = () => resolve();
-          script.onerror = () => reject(new Error('Failed to load in-browser compiler (Babel)'));
+          script.onload = () => {
+            addLog('success', 'compiler', 'Babel compiler loaded successfully.');
+            resolve();
+          };
+          script.onerror = () => {
+            addLog('error', 'compiler', 'CDN script load failed for @babel/standalone');
+            reject(new Error('Failed to load in-browser compiler (Babel)'));
+          };
           document.head.appendChild(script);
         });
       }
 
       // 3. Compile/Transpile TSX -> JS inside the browser!
-      const result = (window as any).Babel.transform(rawCode, {
-        presets: ['react', 'typescript'],
-        filename: `${componentName}.tsx` // Required for TSX parser
-      });
-
-      const transpiledCode = result.code;
+      addLog('info', 'compiler', 'Transpiling TSX to ECMAScript standard...');
+      let transpiledCode = '';
+      try {
+        const result = (window as any).Babel.transform(rawCode, {
+          presets: ['react', 'typescript'],
+          filename: `${componentName}.tsx` // Required for TSX parser
+        });
+        transpiledCode = result.code;
+        addLog('success', 'compiler', `Transpiled "${componentName}.tsx" successfully. Code size: ${transpiledCode.length} chars.`);
+      } catch (babelErr: any) {
+        addLog('error', 'compiler', `Babel transpile error on "${componentName}.tsx": ${babelErr.message}`, babelErr.stack || babelErr.toString());
+        throw babelErr;
+      }
 
       // 4. Setup sandboxed require map just like your server-based compiler did
       const customRequire = (moduleName: string) => {
@@ -87,19 +105,30 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
       const module = { exports };
 
       // 5. Evaluate the browser-transpiled CommonJS code
-      const evaluator = new Function('require', 'module', 'exports', transpiledCode);
-      evaluator(customRequire, module, exports);
+      addLog('info', 'compiler', `Evaluating sandboxed module scope for "${componentName}"...`);
+      try {
+        const evaluator = new Function('require', 'module', 'exports', transpiledCode);
+        evaluator(customRequire, module, exports);
+      } catch (evalErr: any) {
+        addLog('error', 'compiler', `Runtime evaluation failed for "${componentName}.tsx": ${evalErr.message}`, evalErr.stack || evalErr.toString());
+        throw evalErr;
+      }
 
       const Component = module.exports.default || module.exports;
       if (typeof Component !== 'function' && typeof Component !== 'object') {
-        throw new Error('Compiled bundle did not export a valid React component.');
+        const msg = 'Compiled bundle did not export a valid React component. Ensure you have a default export (e.g. "export default function MyComponent ...").';
+        addLog('error', 'compiler', msg);
+        throw new Error(msg);
       }
 
+      addLog('success', 'compiler', `Successfully instantiated "${componentName}"! Component is now active.`);
       setCompiledComponent(() => Component);
     })
     .catch((err: any) => {
       console.error('Dynamic browser-loader failed:', err);
-      setCompileError(err.message || 'An error occurred during client-side compilation.');
+      const msg = err.message || 'An error occurred during client-side compilation.';
+      setCompileError(msg);
+      addLog('error', 'compiler', `Dynamic compilation failed: ${msg}`, err.stack || err.toString());
     })
     .finally(() => {
       setIsLoading(false);

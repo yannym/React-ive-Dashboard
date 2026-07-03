@@ -52,6 +52,7 @@ import {
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { AppletErrorBoundary } from './components/AppletErrorBoundary';
 import { TiledWorkspace } from './components/TiledWorkspace';
+import { SystemConsoleModal } from './components/SystemConsoleModal';
 import { 
   db, 
   auth, 
@@ -183,6 +184,53 @@ export default function App() {
     const saved = localStorage.getItem('cohesive_style_injector');
     return saved !== null ? saved === 'true' : true;
   });
+
+  // --- SYSTEM LOGS CONSOLE STATE ---
+  interface SystemLog {
+    id: string;
+    timestamp: string;
+    type: 'info' | 'error' | 'success' | 'warn';
+    category: string;
+    message: string;
+    details?: string;
+  }
+  const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+  const [showConsoleModal, setShowConsoleModal] = useState(false);
+
+  const addSystemLog = React.useCallback((type: 'info' | 'error' | 'success' | 'warn', category: string, message: string, details?: string) => {
+    const newLog: SystemLog = {
+      id: Math.random().toString(36).substring(2, 9),
+      timestamp: new Date().toLocaleTimeString(),
+      type,
+      category,
+      message,
+      details
+    };
+    setSystemLogs(prev => [newLog, ...prev].slice(0, 500));
+  }, []);
+
+  useEffect(() => {
+    (window as any).addSystemLog = addSystemLog;
+    addSystemLog('info', 'system', 'Applet Cockpit Dashboard initialized.');
+    addSystemLog('info', 'system', 'Local workspace is mapped to client dashboard sandbox. Port 3000 binds active routing.');
+    
+    const handleError = (event: ErrorEvent) => {
+      addSystemLog('error', 'runtime', event.message, event.error?.stack);
+    };
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      const stack = reason instanceof Error ? reason.stack : undefined;
+      addSystemLog('error', 'promise', `Unhandled Promise Rejection: ${message}`, stack);
+    };
+
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+    };
+  }, [addSystemLog]);
 
   // Automated Component discovery scanner
   const [didScanComponents, setDidScanComponents] = useState(false);
@@ -358,16 +406,18 @@ export default function App() {
     try {
       const resp = await fetch(`/api/files/list?path=${encodeURIComponent(subPath)}`);
       if (!resp.ok) {
-        const errData = await resp.json();
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
         throw new Error(errData.error || 'Failed to list directory contents.');
       }
       const data = await resp.json();
       if (data.success) {
         setFsItems(data.contents || []);
         setFsCurrentPath(data.currentPath || subPath);
+        addSystemLog('success', 'fs', `Listed directory "${data.currentPath}" successfully with ${data.contents?.length || 0} items.`);
       }
     } catch (err: any) {
       setFsError(err.message || 'Error listing files.');
+      addSystemLog('error', 'fs', `Failed to list directory "${subPath}": ${err.message || err.toString()}`, err.stack);
     } finally {
       setFsLoading(false);
     }
@@ -383,16 +433,18 @@ export default function App() {
         body: JSON.stringify({ path: filePath })
       });
       if (!resp.ok) {
-        const errData = await resp.json();
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
         throw new Error(errData.error || 'Failed to read file contents.');
       }
       const data = await resp.json();
       if (data.success) {
         setFsSelectedFilePath(filePath);
         setFsFileContent(data.content || '');
+        addSystemLog('success', 'fs', `Read file "${filePath}" successfully (${data.content?.length || 0} characters).`);
       }
     } catch (err: any) {
       setFsError(err.message || 'Error reading file.');
+      addSystemLog('error', 'fs', `Failed to read file "${filePath}": ${err.message || err.toString()}`, err.stack);
     } finally {
       setFsFileLoading(false);
     }
@@ -409,16 +461,18 @@ export default function App() {
         body: JSON.stringify({ path: fsSelectedFilePath, content: fsFileContent })
       });
       if (!resp.ok) {
-        const errData = await resp.json();
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}: ${resp.statusText}` }));
         throw new Error(errData.error || 'Failed to save changes.');
       }
       const data = await resp.json();
       if (data.success) {
         triggerToast('File saved successfully.', 'success');
+        addSystemLog('success', 'fs', `Saved file "${fsSelectedFilePath}" successfully (${fsFileContent?.length || 0} characters).`);
         await handleFetchFsItems(fsCurrentPath);
       }
     } catch (err: any) {
       setFsError(err.message || 'Error saving file.');
+      addSystemLog('error', 'fs', `Failed to save file "${fsSelectedFilePath}": ${err.message || err.toString()}`, err.stack);
     } finally {
       setFsSaving(false);
     }
@@ -1196,6 +1250,7 @@ export default function App() {
   const handleUploadTsx = async (fileName: string, fileContent: string) => {
     setUploading(true);
     setUploadError(null);
+    addSystemLog('info', 'uploader', `Starting upload/save flow for custom component: ${fileName}`, `Payload size: ${fileContent.length} characters.`);
     try {
       const response = await fetch('/api/upload-applet', {
         method: 'POST',
@@ -1203,12 +1258,36 @@ export default function App() {
         body: JSON.stringify({ name: fileName, content: fileContent })
       });
 
-      if (!response.ok) {
-        const errPayload = await response.json();
-        throw new Error(errPayload.error || 'Failed to upload custom React component.');
+      let responseData: any;
+      const contentType = response.headers.get("content-type");
+      
+      if (contentType && contentType.includes("application/json")) {
+        responseData = await response.json().catch(() => null);
+      }
+      
+      if (!responseData) {
+        const responseText = await response.text().catch(() => '');
+        responseData = {
+          success: response.ok,
+          error: `HTTP ${response.status}: ${response.statusText}`,
+          rawText: responseText
+        };
       }
 
-      const result = await response.json();
+      if (!response.ok) {
+        const errorMsg = responseData.error || 'Failed to upload custom React component.';
+        const details = responseData.rawText || JSON.stringify(responseData, null, 2);
+        
+        addSystemLog('error', 'uploader', `Upload API returned status ${response.status}: ${errorMsg}`, details);
+        
+        if (responseData.rawText && responseData.rawText.trim().startsWith('<')) {
+          throw new Error(`The backend server returned an HTML page (Status ${response.status}) instead of JSON. This typically happens if you are running in a static client-only hosting environment like GitHub Pages where the Express server endpoints are not available, or if the server is offline. Open the "System Diagnostic Logs" to inspect the raw HTML.`);
+        } else {
+          throw new Error(errorMsg);
+        }
+      }
+
+      const result = responseData;
       if (result.success) {
         // Automatically append to locally active array listings
         const newApplet: Applet = {
@@ -1226,8 +1305,11 @@ export default function App() {
             await setDoc(doc(activeDb, 'applets', newApplet.id), newApplet);
           } catch (err: any) {
             console.error('Firestore upload mapping rejected:', err);
+            addSystemLog('warn', 'database', `Firestore applet registration rejected: ${err.message}`);
           }
         }
+
+        addSystemLog('success', 'uploader', `Successfully compiled, registered and registered ${fileName}!`, JSON.stringify(result.applet, null, 2));
 
         setActiveApplet(newApplet);
         setShowUploadModal(false);
@@ -1235,7 +1317,9 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
-      setUploadError(err?.message || 'Failure mapping file contents.');
+      const errMsg = err?.message || 'Failure mapping file contents.';
+      setUploadError(errMsg);
+      addSystemLog('error', 'uploader', `Upload caught exception: ${errMsg}`, err.stack || err.toString());
     } finally {
       setUploading(false);
     }
@@ -2466,8 +2550,18 @@ export default function App() {
       </div>
 
       {/* FOOTER GENERAL TRIVIA */}
-      <footer className="bg-[#0A0A0A] border-t border-white/5 px-10 py-5 text-center text-[10px] text-white/30 tracking-widest uppercase font-mono flex flex-col sm:flex-row justify-between items-center gap-2 select-none">
-        <span>Applet Cockpit Dashboard • Verified local execution</span>
+      <footer className="bg-[#0A0A0A] border-t border-white/5 px-10 py-5 text-center text-[10px] text-white/30 tracking-widest uppercase font-mono flex flex-col sm:flex-row justify-between items-center gap-4 select-none shrink-0">
+        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4">
+          <span>Applet Cockpit Dashboard • Verified local execution</span>
+          <button
+            type="button"
+            onClick={() => setShowConsoleModal(true)}
+            className="px-3 py-1 bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10 transition flex items-center gap-1.5 cursor-pointer rounded-none text-[9px] font-mono tracking-wider uppercase font-bold"
+          >
+            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+            Show Diagnostic Logs ({systemLogs.length})
+          </button>
+        </div>
         <span>OMV Server Node Backed • Node specs active</span>
       </footer>
 
@@ -3129,6 +3223,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* --- SYSTEM DIAGNOSTIC LOGS CONSOLE MODAL --- */}
+      {showConsoleModal && (
+        <SystemConsoleModal
+          logs={systemLogs}
+          onClose={() => setShowConsoleModal(false)}
+          onClear={() => setSystemLogs([])}
+        />
       )}
 
       {/* --- SYSTEM FILESYSTEM & SOURCE CODE EDITOR MODAL --- */}
