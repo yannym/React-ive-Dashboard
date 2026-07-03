@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import * as esbuild from "esbuild";
 
 async function startServer() {
   const app = express();
@@ -135,6 +136,46 @@ async function startServer() {
       }
     } catch (err: any) {
       res.status(500).json({ error: err?.message || "Internal error deleting TSX applet" });
+    }
+  });
+
+  // API Endpoint to compile any component .tsx file on the fly to browser CommonJS format
+  app.get("/api/compile-component/:name", async (req, res) => {
+    try {
+      const { name } = req.params;
+      // Resolve clean name (without extension, e.g. "tic_tac_toe_bot_duel" or "tic_tac_toe_bot_duel.tsx")
+      let cleanName = path.basename(name).replace(/[^a-zA-Z0-9_\.-]/g, "_");
+      if (cleanName.endsWith(".tsx")) {
+        cleanName = cleanName.substring(0, cleanName.length - 4);
+      }
+      
+      const filePath = path.join(process.cwd(), "src", "components", `${cleanName}.tsx`);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: `TSX component file not found: ${cleanName}.tsx` });
+      }
+
+      // Read content to compile
+      const fileContent = fs.readFileSync(filePath, "utf8");
+
+      // Compile/transpile using esbuild
+      // Format is CommonJS (cjs) so that we can easily mock "require" and intercept imports of React/lucide-react, etc.
+      const result = await esbuild.transform(fileContent, {
+        loader: "tsx",
+        format: "cjs",
+        target: "es2020",
+        jsx: "transform",
+        sourcemap: "inline"
+      });
+
+      res.json({
+        success: true,
+        componentKey: cleanName,
+        code: result.code
+      });
+    } catch (err: any) {
+      console.error("Failed to compile custom component:", err);
+      res.status(500).json({ error: err?.message || "Failed to compile custom TSX component" });
     }
   });
 
