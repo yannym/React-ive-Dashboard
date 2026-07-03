@@ -112,7 +112,10 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
       let transpiledCode = '';
       try {
         const result = (window as any).Babel.transform(rawCode, {
-          presets: ['react', 'typescript'],
+          presets: [
+            ['react', { runtime: 'classic' }],
+            'typescript'
+          ],
           plugins: ['transform-modules-commonjs'],
           filename: `${componentName}.tsx` // Required for TSX parser
         });
@@ -128,6 +131,14 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
         const name = moduleName.toLowerCase();
         if (name === 'react') return React;
         if (name === 'react-dom') return (window as any).ReactDOM || React;
+        if (name === 'react/jsx-runtime' || name === 'react/jsx-dev-runtime') {
+          return {
+            jsx: (type: any, props: any, key: any) => React.createElement(type, { ...props, key }),
+            jsxs: (type: any, props: any, key: any) => React.createElement(type, { ...props, key }),
+            jsxDEV: (type: any, props: any, key: any, isStatic: boolean, source: any, self: any) => React.createElement(type, { ...props, key }),
+            Fragment: React.Fragment
+          };
+        }
         if (name === 'lucide-react') return LucideIcons;
         if (name === 'motion' || name === 'motion/react' || name === 'framer-motion') return MotionReact;
         if ((window as any)[moduleName]) return (window as any)[moduleName];
