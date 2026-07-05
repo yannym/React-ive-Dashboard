@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Sparkles, X, Send, Copy, Check, Server, Terminal, AlertTriangle } from "lucide-react";
+import { Sparkles, X, Send, Copy, Check, Server, Terminal, AlertTriangle, Key } from "lucide-react";
 import { getBackendUrl } from "../lib/filesystem";
 
 interface GeminiCopilotProps {
@@ -17,13 +17,31 @@ interface Message {
 export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }: GeminiCopilotProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
-  const [history, setHistory] = useState<Message[]>([]);
+  const [history, setHistory] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem("gemini_copilot_history");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [useTools, setUseTools] = useState(true);
   const [isServerOnline, setIsServerOnline] = useState<boolean | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [customKey, setCustomKey] = useState(() => localStorage.getItem("custom_gemini_api_key") || "");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Persist chat history to localStorage when changed
+  useEffect(() => {
+    try {
+      localStorage.setItem("gemini_copilot_history", JSON.stringify(history));
+    } catch (e) {
+      console.error("Failed to save chat history to localStorage:", e);
+    }
+  }, [history]);
 
   // Check if Express backend is online on load
   useEffect(() => {
@@ -49,26 +67,21 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
     addSystemLog("success", "copilot", "Copied code snippet to clipboard.");
   };
 
-  // Send Message to backend endpoint
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!message.trim() || loading) return;
-
-    const userText = message;
-    setMessage("");
-
+  const sendPrompt = async (userText: string, currentHistory: Message[], customApiKeyOverride?: string) => {
     const newMsg: Message = {
       role: "user",
       content: userText,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
-    const updatedHistory = [...history, newMsg];
+    const updatedHistory = [...currentHistory, newMsg];
     setHistory(updatedHistory);
     setLoading(true);
 
     try {
       addSystemLog("info", "copilot", `Sending instruction to Gemini Copilot...`, userText);
+
+      const apiKeyToUse = customApiKeyOverride || customKey || undefined;
 
       const response = await fetch(getBackendUrl("/api/gemini/chat"), {
         method: "POST",
@@ -77,6 +90,7 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
           message: userText,
           history: updatedHistory.slice(-10).map((h) => ({ role: h.role, content: h.content })),
           useTools,
+          customApiKey: apiKeyToUse,
         }),
       });
 
@@ -121,9 +135,20 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
     }
   };
 
+  // Send Message to backend endpoint
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || loading) return;
+
+    const userText = message;
+    setMessage("");
+    await sendPrompt(userText, history);
+  };
+
   // Custom renderer for code block parsing and markdown style
   const renderMessageText = (msg: Message, msgIndex: number) => {
     const text = msg.content;
+    const isQuotaError = text.toLowerCase().includes("quota exceeded") || text.toLowerCase().includes("resource_exhausted") || text.toLowerCase().includes("rate limits");
     const parts = [];
     const regex = /```(tsx|typescript|javascript|html|css|json|bash)?([\s\S]*?)```/g;
     let lastIndex = 0;
@@ -196,6 +221,62 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
 
           return <div key={part.id} className="space-y-1">{lines}</div>;
         })}
+        {isQuotaError && (
+          <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2 text-left">
+            <div className="flex items-center gap-1.5 text-amber-400 font-bold font-mono text-[10px]">
+              <Key className="w-3.5 h-3.5 animate-pulse" />
+              <span>CONFIGURE CUSTOM API KEY FALLBACK</span>
+            </div>
+            <p className="text-[10px] text-white/60 font-sans leading-normal">
+              To bypass the shared rate limit, paste your own free Gemini API key below. It stays secure inside your browser's localStorage.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={customKey}
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  setCustomKey(val);
+                  if (val) {
+                    localStorage.setItem("custom_gemini_api_key", val);
+                  } else {
+                    localStorage.removeItem("custom_gemini_api_key");
+                  }
+                }}
+                placeholder="AIzaSy... (paste your key here)"
+                className="flex-1 bg-black/60 border border-white/10 rounded px-2.5 py-1.5 text-[10px] font-mono text-emerald-400 placeholder-white/20 focus:outline-none focus:border-emerald-500"
+              />
+              {customKey && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomKey("");
+                    localStorage.removeItem("custom_gemini_api_key");
+                  }}
+                  className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-500/20 text-[9px] font-bold rounded cursor-pointer transition"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  const lastUserMsg = [...history].reverse().find(m => m.role === "user");
+                  if (lastUserMsg) {
+                    // Remove current error message from history to keep chat clean
+                    setHistory(prev => prev.filter(m => m !== msg));
+                    sendPrompt(lastUserMsg.content, history.filter(m => m !== msg && m !== lastUserMsg), customKey);
+                  }
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/20 text-[9px] font-bold rounded cursor-pointer transition flex items-center gap-1 uppercase font-mono"
+              >
+                <span>Save Key & Retry Action</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -249,30 +330,99 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
                 </div>
               </div>
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="p-1.5 hover:bg-white/5 text-white/40 hover:text-white rounded-lg transition cursor-pointer"
-              title="Close Panel"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              {history.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm("Clear your chat conversation history?")) {
+                      setHistory([]);
+                      localStorage.removeItem("gemini_copilot_history");
+                      addSystemLog("info", "copilot", "Chat conversation history cleared.");
+                    }
+                  }}
+                  className="px-2 py-1 hover:bg-red-500/10 text-white/40 hover:text-red-400 rounded-md transition text-[9px] font-mono font-bold select-none cursor-pointer border border-transparent hover:border-red-500/20"
+                  title="Clear Chat History"
+                >
+                  Clear Chat
+                </button>
+              )}
+              <button
+                onClick={() => setIsOpen(false)}
+                className="p-1.5 hover:bg-white/5 text-white/40 hover:text-white rounded-lg transition cursor-pointer"
+                title="Close Panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* PREVIEWS & DIRECTORY SWITCH */}
-          <div className="px-4 py-2 bg-black/40 border-b border-white/5 flex items-center justify-between text-[10px] font-mono text-white/50">
-            <label className="flex items-center gap-2 cursor-pointer select-none" title="Allow Gemini to list, read, and write files in the local workspace">
-              <input
-                type="checkbox"
-                checked={useTools}
-                onChange={(e) => setUseTools(e.target.checked)}
-                className="rounded border-white/20 bg-black/40 text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5"
-                disabled={isServerOnline === false}
-              />
-              <span className={useTools && isServerOnline !== false ? "text-emerald-400" : ""}>Allow Workspace Tools</span>
-            </label>
-            <span className="text-[9px] bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-white/40">
-              {appletsCount} Active Node{appletsCount !== 1 ? "s" : ""}
-            </span>
+          <div className="px-4 py-2 bg-black/40 border-b border-white/5 flex flex-col gap-2">
+            <div className="flex items-center justify-between text-[10px] font-mono text-white/50">
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="Allow Gemini to list, read, and write files in the local workspace">
+                <input
+                  type="checkbox"
+                  checked={useTools}
+                  onChange={(e) => setUseTools(e.target.checked)}
+                  className="rounded border-white/20 bg-black/40 text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer w-3.5 h-3.5"
+                  disabled={isServerOnline === false}
+                />
+                <span className={useTools && isServerOnline !== false ? "text-emerald-400" : ""}>Allow Workspace Tools</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowKeyInput(!showKeyInput)}
+                  className={`p-1 hover:bg-white/5 rounded transition cursor-pointer flex items-center gap-1 ${customKey ? "text-emerald-400" : "text-white/40"}`}
+                  title="Configure custom Gemini API Key fallback"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  <span className="text-[9px] font-bold uppercase">{customKey ? "Active Key" : "Key"}</span>
+                </button>
+                <span className="text-[9px] bg-white/5 border border-white/10 px-1.5 py-0.5 rounded text-white/40">
+                  {appletsCount} Active Node{appletsCount !== 1 ? "s" : ""}
+                </span>
+              </div>
+            </div>
+            
+            {showKeyInput && (
+              <div className="pt-1.5 pb-1 border-t border-white/5 space-y-1.5 animate-fade-in">
+                <div className="flex items-center justify-between text-[9px] font-mono text-white/40">
+                  <span>Custom GEMINI_API_KEY Fallback:</span>
+                  {customKey && <span className="text-emerald-400 font-bold uppercase">Stored</span>}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={customKey}
+                    onChange={(e) => {
+                      const val = e.target.value.trim();
+                      setCustomKey(val);
+                      if (val) {
+                        localStorage.setItem("custom_gemini_api_key", val);
+                      } else {
+                        localStorage.removeItem("custom_gemini_api_key");
+                      }
+                    }}
+                    placeholder="AIzaSy... (leave blank to use shared key)"
+                    className="flex-1 bg-black/60 border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-emerald-400 placeholder-white/20 focus:outline-none focus:border-emerald-500"
+                  />
+                  {customKey && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomKey("");
+                        localStorage.removeItem("custom_gemini_api_key");
+                      }}
+                      className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-500/20 text-[9px] font-bold rounded cursor-pointer transition"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* CHAT BUBBLES WINDOW */}

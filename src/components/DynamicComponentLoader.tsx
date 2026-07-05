@@ -141,7 +141,20 @@ export const DynamicComponentLoader: React.FC<Props> = ({ componentName, useCohe
         }
         if (name === 'lucide-react') return LucideIcons;
         if (name === 'motion' || name === 'motion/react' || name === 'framer-motion') return MotionReact;
+        
+        // Dynamic CDN / custom loaded dependencies lookup
+        const cdndeps = (window as any).CDNDependencies || {};
+        if (cdndeps[moduleName]) return cdndeps[moduleName];
+        if (cdndeps[name]) return cdndeps[name];
+        
         if ((window as any)[moduleName]) return (window as any)[moduleName];
+        if ((window as any)[name]) return (window as any)[name];
+        
+        // Check popular dashboard libraries capitalization fallback
+        if (name === 'recharts' && (window as any).Recharts) return (window as any).Recharts;
+        if (name === 'd3' && (window as any).d3) return (window as any).d3;
+        if (name === 'canvas-confetti' && (window as any).confetti) return (window as any).confetti;
+        
         throw new Error(`Module "${moduleName}" is not pre-installed in the dashboard sandbox.`);
       };
 

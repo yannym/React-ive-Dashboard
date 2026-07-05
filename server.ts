@@ -457,12 +457,12 @@ async function startServer() {
 
   app.post("/api/gemini/chat", async (req, res) => {
     try {
-      const { message, history, useTools } = req.body;
+      const { message, history, useTools, customApiKey } = req.body;
       
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = customApiKey || req.headers["x-gemini-api-key"] || process.env.GEMINI_API_KEY;
       if (!apiKey) {
         return res.status(400).json({ 
-          error: "GEMINI_API_KEY environment variable is not configured. Please add it in Settings > Secrets." 
+          error: "GEMINI_API_KEY environment variable is not configured. Please add it in Settings > Secrets, or configure a custom API Key in the Gemini Copilot console panel." 
         });
       }
 
@@ -585,7 +585,7 @@ async function startServer() {
         errString.includes("429") ||
         errString.includes("RESOURCE_EXHAUSTED")
       ) {
-        errorMessage = "Gemini API free-tier quota exceeded. The shared API key has reached its rate limits. Please wait about 60 seconds and try again, or configure your own custom backend server / Gemini credentials.";
+        errorMessage = "Gemini API free-tier quota exceeded. The shared API key has reached its rate limits. Please wait about 60 seconds and try again, or click 'Key' (or key icon) at the top of the Gemini Copilot panel to store your own custom GEMINI_API_KEY fallback.";
       }
       res.status(500).json({ error: errorMessage });
     }

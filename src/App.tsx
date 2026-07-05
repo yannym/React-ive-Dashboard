@@ -190,6 +190,14 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Dynamic Applet Library Installer States
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [installAppletData, setInstallAppletData] = useState<{ name: string; code: string } | null>(null);
+  const [installState, setInstallState] = useState<'idle' | 'checking' | 'warning' | 'installing' | 'registering' | 'success' | 'error'>('idle');
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [missingDeps, setMissingDeps] = useState<string[]>([]);
+  const [installerError, setInstallerError] = useState<string | null>(null);
+
   // Theme override state
   const [useCohesiveInjector, setUseCohesiveInjector] = useState<boolean>(() => {
     const saved = localStorage.getItem('cohesive_style_injector');
@@ -263,6 +271,215 @@ export default function App() {
       window.removeEventListener('unhandledrejection', handleRejection);
     };
   }, [addSystemLog]);
+
+  // --- IN-BROWSER / REMOTE APPLET INSTALLER CONTROLLERS ---
+  const checkDependencies = (code: string) => {
+    const importRegex = /from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]/g;
+    const foundDeps: string[] = [];
+    let match;
+    while ((match = importRegex.exec(code)) !== null) {
+      const pkg = match[1] || match[2];
+      if (pkg && !pkg.startsWith('.') && !pkg.startsWith('/') && !foundDeps.includes(pkg)) {
+        foundDeps.push(pkg);
+      }
+    }
+
+    const builtIns = [
+      'react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime',
+      'lucide-react', 'motion', 'motion/react', 'framer-motion'
+    ];
+
+    const missing = foundDeps.filter(pkg => {
+      const lower = pkg.toLowerCase();
+      if (builtIns.includes(lower)) return false;
+      const cdndeps = (window as any).CDNDependencies || {};
+      if (cdndeps[pkg] || cdndeps[lower]) return false;
+      if ((window as any)[pkg] || (window as any)[lower]) return false;
+      return true;
+    });
+
+    return { all: foundDeps, missing };
+  };
+
+  const executeInstallFlow = async (fileName: string, fileContent: string) => {
+    setInstallState('registering');
+    setInstallLogs(prev => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] Registering custom TSX source file in Workspace...`
+    ]);
+
+    try {
+      const cleanFileName = fileName.endsWith('.tsx') ? fileName : `${fileName}.tsx`;
+      const fileDirName = `src/components/${cleanFileName}`;
+      
+      // Save file dynamically
+      await writeFile(fileDirName, fileContent);
+      
+      // Complete register applet
+      await handleUploadTsx(cleanFileName, fileContent);
+
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ✅ Compilation successful! Registered applet "${cleanFileName}" into active cockpit index.`
+      ]);
+      setInstallState('success');
+      triggerToast(`Successfully installed ${cleanFileName}!`, 'success');
+    } catch (err: any) {
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ❌ Registration failed: ${err.message || err}`
+      ]);
+      setInstallerError(err.message || 'Failed to compile or register applet.');
+      setInstallState('error');
+    }
+  };
+
+  const resolveDepsWithCDN = async () => {
+    setInstallState('installing');
+    setInstallLogs(prev => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] Initializing live sandbox CDN injection...`
+    ]);
+
+    try {
+      for (const dep of missingDeps) {
+        setInstallLogs(prev => [
+          ...prev,
+          `[${new Date().toLocaleTimeString()}] Downloading package "${dep}" dynamically from esm.sh...`
+        ]);
+
+        const module = await import(/* @vite-ignore */ `https://esm.sh/${dep}`);
+        (window as any).CDNDependencies = (window as any).CDNDependencies || {};
+        (window as any).CDNDependencies[dep] = module.default || module;
+        (window as any).CDNDependencies[dep.toLowerCase()] = module.default || module;
+        (window as any)[dep] = module.default || module;
+
+        setInstallLogs(prev => [
+          ...prev,
+          `[${new Date().toLocaleTimeString()}] Dynamic module "${dep}" is bound and ready in client sandbox!`
+        ]);
+      }
+
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] All missing dependencies loaded! Initiating final compilation...`
+      ]);
+
+      if (installAppletData) {
+        await executeInstallFlow(installAppletData.name, installAppletData.code);
+      }
+    } catch (err: any) {
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ❌ Dynamic CDN load failed: ${err.message || err}`
+      ]);
+      setInstallerError(err.message || 'CDN injection failed. Please try dev-server NPM installation.');
+      setInstallState('error');
+    }
+  };
+
+  const resolveDepsWithNPM = async () => {
+    setInstallState('installing');
+    setInstallLogs(prev => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] Initializing Dev Server NPM package installation...`
+    ]);
+
+    try {
+      const pkgsToInstall = missingDeps.join(' ');
+      const installCommand = `npm install --save ${pkgsToInstall}`;
+
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] Running on backend container: $ ${installCommand}`
+      ]);
+
+      const response = await fetch(getBackendUrl('/api/terminal/run'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: installCommand, cwd: '.' })
+      });
+
+      const data = await response.json();
+      if (!response.ok || data.success === false) {
+        throw new Error(data.error || data.stderr || 'NPM Command returned non-zero status.');
+      }
+
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] Installation output:\n${data.stdout || ''}`,
+        `[${new Date().toLocaleTimeString()}] NPM packages successfully installed. Synchronizing virtual workspace...`
+      ]);
+
+      if (installAppletData) {
+        await executeInstallFlow(installAppletData.name, installAppletData.code);
+      }
+    } catch (err: any) {
+      setInstallLogs(prev => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ❌ NPM Install Failed: ${err.message || err}`,
+        `[${new Date().toLocaleTimeString()}] Falling back automatically to client-side CDN injection...`
+      ]);
+      await resolveDepsWithCDN();
+    }
+  };
+
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data;
+      if (data && data.type === 'APPLET_INSTALL' && data.payload) {
+        const { name, code } = data.payload;
+        if (!name || !code) {
+          addSystemLog('warn', 'installer', 'Received empty APPLET_INSTALL postMessage payload.');
+          return;
+        }
+
+        addSystemLog('info', 'installer', `Received incoming postMessage APPLET_INSTALL for: ${name}`);
+        setInstallAppletData({ name, code });
+        setShowInstallModal(true);
+        setInstallState('checking');
+        setInstallLogs([
+          `[${new Date().toLocaleTimeString()}] INCOMING APPLET SIGNAL RECEIVED`,
+          `[${new Date().toLocaleTimeString()}] Target applet: "${name}"`,
+          `[${new Date().toLocaleTimeString()}] Code size: ${code.length} characters. Running security and dependency checks...`
+        ]);
+        setInstallerError(null);
+
+        try {
+          const { all, missing } = checkDependencies(code);
+          setInstallLogs(prev => [
+            ...prev,
+            `[${new Date().toLocaleTimeString()}] Identified imports: [${all.join(', ')}]`
+          ]);
+
+          if (missing.length > 0) {
+            setMissingDeps(missing);
+            setInstallLogs(prev => [
+              ...prev,
+              `[${new Date().toLocaleTimeString()}] ⚠️ MISSING SANDBOX LIBRARIES: [${missing.join(', ')}]`,
+              `[${new Date().toLocaleTimeString()}] Please choose a resolution option to proceed.`
+            ]);
+            setInstallState('warning');
+          } else {
+            setMissingDeps([]);
+            setInstallLogs(prev => [
+              ...prev,
+              `[${new Date().toLocaleTimeString()}] Perfect! All dependencies verified.`
+            ]);
+            await executeInstallFlow(name, code);
+          }
+        } catch (err: any) {
+          setInstallerError(err.message || 'Verification phase failed.');
+          setInstallState('error');
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [addSystemLog, missingDeps, installAppletData]);
 
   // Automated Component discovery scanner
   const [didScanComponents, setDidScanComponents] = useState(false);
@@ -3609,6 +3826,187 @@ services:
                   className="px-6 py-2.5 text-[10px] font-bold uppercase tracking-widest bg-white text-black hover:bg-neutral-200 rounded-none cursor-pointer"
                 >
                   Assign Config Settings
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- REMOTE APPLET LIBRARY INSTALLER PORTAL MODAL --- */}
+      {showInstallModal && installAppletData && (
+        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-4 font-mono text-xs">
+          <div className="bg-[#0c0c0c] border border-indigo-500/30 rounded-none w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] shadow-[0_0_50px_rgba(99,102,241,0.15)] animate-fade-in">
+            {/* Header */}
+            <div className="border-b border-indigo-500/20 p-5 bg-[#0e0e15] flex items-center justify-between">
+              <h3 className="text-sm font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-2.5">
+                <Server className="w-5 h-5 animate-pulse" />
+                Applet Library Installer Portal
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowInstallModal(false);
+                  setInstallState('idle');
+                }}
+                className="p-1 rounded-none hover:bg-white/5 text-white/40 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 flex-1 overflow-y-auto">
+              {/* Applet Details Banner */}
+              <div className="bg-indigo-950/20 border border-indigo-500/10 p-4 rounded-none flex items-start gap-4">
+                <div className="text-3xl p-2 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 select-none">
+                  📦
+                </div>
+                <div className="space-y-1.5 flex-1 min-w-0">
+                  <div className="text-[10px] text-indigo-400 uppercase tracking-wider font-bold">Package Installer</div>
+                  <h4 className="text-base font-bold text-white truncate">{installAppletData.name}</h4>
+                  <p className="text-[10px] text-white/40 leading-relaxed">
+                    Source payload size: <span className="text-white/60 font-bold">{(installAppletData.code.length / 1024).toFixed(2)} KB</span> • Direct secure dashboard compiler integration active.
+                  </p>
+                </div>
+              </div>
+
+              {/* Console Terminal Screen */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-[10px] text-white/40 font-bold uppercase tracking-widest pl-1 select-none">
+                  <span>Installer Log Terminal</span>
+                  <span className="text-indigo-400 font-bold animate-pulse">● online</span>
+                </div>
+                <div className="bg-black/90 border border-white/5 p-4 rounded-none h-48 overflow-y-auto font-mono text-[10px] leading-relaxed space-y-1.5 selection:bg-indigo-500/20">
+                  {installLogs.map((log, idx) => {
+                    const isError = log.includes('❌') || log.includes('Error') || log.includes('Failed');
+                    const isSuccess = log.includes('✅') || log.includes('successful') || log.includes('Verified') || log.includes('Completed');
+                    return (
+                      <div key={idx} className={isError ? 'text-red-400' : isSuccess ? 'text-emerald-400 font-bold' : 'text-neutral-400'}>
+                        {log}
+                      </div>
+                    );
+                  })}
+                  {['checking', 'installing', 'registering'].includes(installState) && (
+                    <div className="text-indigo-400 animate-pulse flex items-center gap-2">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Processing task in backend scheduler...</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Status sections */}
+              {installState === 'warning' && (
+                <div className="space-y-4 border border-amber-500/20 bg-amber-500/5 p-4 rounded-none">
+                  <div className="flex items-center gap-2 text-amber-500 font-bold uppercase text-[10px] tracking-widest select-none">
+                    <AlertTriangle className="w-4 h-4" />
+                    Missing Sandbox dependencies detected
+                  </div>
+                  <p className="text-[11px] text-white/60 leading-relaxed font-sans">
+                    The requested TSX applet imports external npm packages that are not pre-installed in the cockpit container sandbox. To run this applet correctly, you must install:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {missingDeps.map((dep, idx) => (
+                      <span key={idx} className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono text-[10px] font-bold">
+                        {dep}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={resolveDepsWithCDN}
+                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] uppercase tracking-wider rounded-none transition cursor-pointer text-center flex flex-col items-center justify-center gap-1.5"
+                    >
+                      <span className="text-white">🚀 Live CDN Loading</span>
+                      <span className="text-[8px] text-indigo-200 font-normal normal-case font-sans">Instant sandbox injection, zero downtime</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resolveDepsWithNPM}
+                      className="px-4 py-3 bg-white/5 hover:bg-white/10 text-white border border-white/15 font-bold text-[10px] uppercase tracking-wider rounded-none transition cursor-pointer text-center flex flex-col items-center justify-center gap-1.5"
+                    >
+                      <span className="text-white">🐳 Dev Container NPM install</span>
+                      <span className="text-[8px] text-white/40 font-normal normal-case font-sans">Permanent backend npm installation</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {installState === 'success' && (
+                <div className="space-y-3 border border-emerald-500/20 bg-emerald-500/5 p-4 rounded-none text-center">
+                  <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xl flex items-center justify-center mx-auto select-none font-bold">
+                    ✓
+                  </div>
+                  <h4 className="text-sm font-bold text-emerald-400 uppercase tracking-widest">Installation Completed Successfully</h4>
+                  <p className="text-[11px] text-white/60 max-w-sm mx-auto leading-relaxed font-sans font-sans">
+                    The applet was fully registered and compiled. You can launch it directly inside the cockpit dashboard right now.
+                  </p>
+                </div>
+              )}
+
+              {installState === 'error' && (
+                <div className="space-y-3 border border-red-500/20 bg-red-500/5 p-4 rounded-none">
+                  <div className="flex items-center gap-2 text-red-400 font-bold uppercase text-[10px] tracking-widest select-none">
+                    <AlertCircle className="w-4 h-4" />
+                    Installation Halted
+                  </div>
+                  <pre className="p-3 bg-black/40 border border-white/5 text-red-400 text-[10px] whitespace-pre-wrap break-all leading-normal max-h-24 overflow-y-auto select-all">
+                    {installerError || 'Unknown compiler or workspace registration error.'}
+                  </pre>
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={resolveDepsWithCDN}
+                      className="px-4 py-1.5 bg-indigo-600/80 hover:bg-indigo-600 text-white font-bold text-[10px] uppercase tracking-wider rounded-none transition cursor-pointer"
+                    >
+                      Force CDN Sandbox Bypass
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowInstallModal(false);
+                        setInstallState('idle');
+                      }}
+                      className="px-4 py-1.5 bg-white/5 hover:bg-white/10 text-white border border-white/10 font-bold text-[10px] uppercase tracking-wider rounded-none transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-white/5 p-5 bg-[#08080c] flex justify-end gap-3 shrink-0">
+              {installState !== 'checking' && installState !== 'installing' && installState !== 'registering' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInstallModal(false);
+                    setInstallState('idle');
+                  }}
+                  className="px-5 py-2 text-[9px] font-bold uppercase tracking-widest bg-white/5 hover:bg-white/10 text-white/70 border border-white/10 rounded-none cursor-pointer transition-all"
+                >
+                  Close Portal
+                </button>
+              )}
+              {installState === 'success' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInstallModal(false);
+                    setInstallState('idle');
+                    // Find the newly added applet and open it!
+                    const matching = applets.find(a => a.name === installAppletData.name.replace(/\.tsx$/, ''));
+                    if (matching) {
+                      handleOpenApplet(matching);
+                    }
+                  }}
+                  className="px-5 py-2 text-[9px] font-bold uppercase tracking-widest bg-indigo-600 hover:bg-indigo-500 text-white rounded-none cursor-pointer transition-all"
+                >
+                  Launch Applet 🚀
                 </button>
               )}
             </div>
