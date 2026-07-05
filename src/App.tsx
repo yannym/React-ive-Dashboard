@@ -175,7 +175,8 @@ export default function App() {
   // UI Panels
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'storage' | 'system'>('storage');
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'nas' | 'system'>('storage');
+  const [copiedYaml, setCopiedYaml] = useState(false);
   const [editingApplet, setEditingApplet] = useState<Applet | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -3055,7 +3056,7 @@ export default function App() {
       {/* --- CLOUD SETTINGS / CONFIGURATION MODAL --- */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121212] border border-white/10 rounded-none w-full max-w-md overflow-hidden flex flex-col justify-between max-h-[90vh]">
+          <div className="bg-[#121212] border border-white/10 rounded-none w-full max-w-lg overflow-hidden flex flex-col justify-between max-h-[90vh]">
             <div className="border-b border-white/5 p-6 flex items-center justify-between shrink-0">
               <h3 className="text-sm font-serif italic text-white flex items-center gap-2.5">
                 <Settings className="w-5 h-5 text-white/40" />
@@ -3084,6 +3085,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => setSettingsTab('nas')}
+                className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
+                  settingsTab === 'nas' 
+                    ? 'border-white text-white bg-white/5' 
+                    : 'border-transparent text-white/40 hover:text-white/80'
+                }`}
+              >
+                OMV / NAS Setup
+              </button>
+              <button
+                type="button"
                 onClick={() => setSettingsTab('system')}
                 className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
                   settingsTab === 'system' 
@@ -3091,11 +3103,11 @@ export default function App() {
                     : 'border-transparent text-white/40 hover:text-white/80'
                 }`}
               >
-                System Diagnostics
+                Diagnostics
               </button>
             </div>
 
-            {settingsTab === 'storage' ? (
+            {settingsTab === 'storage' && (
               <form onSubmit={handleSaveCustomFirebaseSettings} className="p-6 space-y-4 text-xs font-medium overflow-y-auto">
                 <div className="space-y-1.5 bg-black p-4 border border-white/5 rounded-none">
                   <span className="text-[9px] font-mono font-bold block uppercase text-white/50 tracking-widest mb-1">GitHub Pages & OMV Ready</span>
@@ -3141,7 +3153,104 @@ export default function App() {
                   )}
                 </div>
               </form>
-            ) : (
+            )}
+
+            {settingsTab === 'nas' && (
+              <div className="p-6 space-y-4 text-xs font-mono overflow-y-auto">
+                <div className="bg-black/40 p-4 border border-white/5 space-y-3 rounded-none">
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold uppercase tracking-widest text-[9px] border-b border-white/5 pb-2">
+                    <Server className="w-4 h-4" />
+                    OpenMediaVault (OMV) / NAS Setup
+                  </div>
+                  <p className="text-[10px] text-white/60 font-sans leading-relaxed">
+                    By running a self-hosted Express container on your local NAS, you enable full direct filesystem access to read/write local drives, compile complex custom components, and execute advanced AI workflows safely from your own hardware.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {/* Step 1 */}
+                  <div className="space-y-1.5">
+                    <span className="text-[9px] font-bold text-white/40 block uppercase tracking-widest">01. Create Shared NAS Directory</span>
+                    <p className="text-[10px] font-sans text-white/50 leading-relaxed">
+                      Log in to your OMV dashboard. Under <strong className="text-white/70">Storage &gt; Shared Folders</strong>, create a directory for your dashboard workspace (e.g. <code className="text-emerald-400 bg-white/5 px-1 font-mono font-bold">/srv/dev-disk-by-uuid-xxx/architect-dashboard</code>). Ensure Docker has write permission.
+                    </p>
+                  </div>
+
+                  {/* Step 2 */}
+                  <div className="space-y-2 border-t border-white/5 pt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-white/40 uppercase tracking-widest">02. Copy Docker Compose Configuration</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const yaml = `version: "3.8"
+services:
+  architect-backend:
+    image: node:18-alpine
+    container_name: architect-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=your_gemini_api_key_here
+    volumes:
+      - /srv/dev-disk-by-uuid-xxx/architect-dashboard:/app
+    working_dir: /app
+    command: sh -c "npm install && npm run build && npm start"`;
+                          navigator.clipboard.writeText(yaml);
+                          setCopiedYaml(true);
+                          setTimeout(() => setCopiedYaml(false), 2000);
+                        }}
+                        className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-none cursor-pointer uppercase tracking-widest transition-all"
+                      >
+                        {copiedYaml ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {copiedYaml ? 'Copied' : 'Copy YAML'}
+                      </button>
+                    </div>
+
+                    <pre className="bg-[#050505] p-3 text-[9px] font-mono border border-white/5 overflow-x-auto text-white/70 max-h-48 leading-relaxed selection:bg-white/10 select-all">
+{`version: "3.8"
+services:
+  architect-backend:
+    image: node:18-alpine
+    container_name: architect-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=your_gemini_api_key_here
+    volumes:
+      - /srv/dev-disk-by-uuid-xxx/architect-dashboard:/app
+    working_dir: /app
+    command: sh -c "npm install && npm run build && npm start"`}
+                    </pre>
+                  </div>
+
+                  {/* Step 3 */}
+                  <div className="space-y-1.5 border-t border-white/5 pt-3">
+                    <span className="text-[9px] font-bold text-white/40 block uppercase tracking-widest">03. Run Services & Connect IP</span>
+                    <p className="text-[10px] font-sans text-white/50 leading-relaxed">
+                      On OpenMediaVault, deploy the compose file under <strong className="text-white/70">Services &gt; Compose</strong>. Once active, copy your NAS local IP address (e.g. <code className="text-indigo-300 bg-white/5 px-1 font-mono">http://192.168.1.100:3000</code>), switch to the <strong className="text-white/70">Durable Storage</strong> tab above, and paste it under <strong className="text-white/70">Custom Backend Service Container URL</strong>.
+                    </p>
+                  </div>
+
+                  {/* Step 4: Future Ready Tip */}
+                  <div className="bg-emerald-500/5 p-3.5 border border-emerald-500/15 space-y-1.5">
+                    <div className="flex items-center gap-2 text-emerald-400 font-bold uppercase tracking-widest text-[9px]">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Future-Proof Capability Tip
+                    </div>
+                    <p className="text-[10px] text-emerald-400/80 font-sans leading-relaxed">
+                      Hosting your own custom NAS container prepares your dashboard to host and launch complex non-TSX applets (native HTML index files, compiled SPA assets, and custom executable scripts) from local storage directories in upcoming iterations!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'system' && (
               <div className="p-6 space-y-4 text-xs font-mono overflow-y-auto">
                 <div className="bg-black/50 p-4 border border-white/5 space-y-3">
                   <div className="flex items-center justify-between border-b border-white/5 pb-2">
