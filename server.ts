@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { exec } from "child_process";
 import { createServer as createViteServer } from "vite";
 import * as esbuild from "esbuild";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -333,6 +334,31 @@ async function startServer() {
       res.json({ success: true, message: `Successfully deleted: ${relativePath}` });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || "Failed to delete target." });
+    }
+  });
+
+  // API Terminal execution endpoint to run shell commands inside container / NAS workspace
+  app.post("/api/terminal/run", (req, res) => {
+    try {
+      const { command, cwd } = req.body;
+      if (!command) {
+        return res.status(400).json({ error: "Command is required." });
+      }
+
+      const baseDir = process.cwd();
+      const safeCwd = cwd ? path.resolve(baseDir, cwd) : baseDir;
+
+      exec(command, { cwd: safeCwd, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+        res.json({
+          success: !error,
+          stdout: stdout || "",
+          stderr: stderr || "",
+          exitCode: error ? (error.code || 1) : 0,
+          currentCwd: safeCwd
+        });
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to execute command." });
     }
   });
 

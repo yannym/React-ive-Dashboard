@@ -40,6 +40,7 @@ import {
   RotateCcw,
   AlertCircle
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Applet, OpenMode, SandboxConfig, FirebaseConnectionDetails } from './types';
 import { BUILT_IN_APPLETS, AVAILABLE_CATEGORIES, ACCENT_COLORS, POPULAR_LAUNCH_ICONS } from './data/builtInApplets';
 import { 
@@ -175,8 +176,14 @@ export default function App() {
   // UI Panels
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'storage' | 'nas' | 'system'>('storage');
+  const [settingsTab, setSettingsTab] = useState<'storage' | 'nas' | 'terminal' | 'system'>('storage');
   const [copiedYaml, setCopiedYaml] = useState(false);
+  const [terminalLogs, setTerminalLogs] = useState<{ command: string; output: string; isError: boolean; timestamp: string }[]>([
+    { command: '# system-init', output: 'Architect NAS Command terminal connected. Type commands below.', isError: false, timestamp: new Date().toLocaleTimeString() }
+  ]);
+  const [terminalInput, setTerminalInput] = useState('');
+  const [terminalLoading, setTerminalLoading] = useState(false);
+  const [terminalCwd, setTerminalCwd] = useState('.');
   const [editingApplet, setEditingApplet] = useState<Applet | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -1571,6 +1578,82 @@ export default function App() {
     fileReader.readAsText(targetFile);
   };
 
+  // --- NAS TERMINAL SHELL EXECUTION HANDLER ---
+  const runTerminalCommand = async (commandToRun: string) => {
+    if (!commandToRun.trim() || terminalLoading) return;
+    setTerminalLoading(true);
+    
+    const newLogEntry = {
+      command: commandToRun,
+      output: 'Executing on NAS container...',
+      isError: false,
+      timestamp: new Date().toLocaleTimeString()
+    };
+    setTerminalLogs(prev => [...prev, newLogEntry]);
+
+    try {
+      const response = await fetch(getBackendUrl('/api/terminal/run'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: commandToRun,
+          cwd: terminalCwd
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success !== false) {
+        setTerminalLogs(prev => prev.map((log, idx) => {
+          if (idx === prev.length - 1) {
+            return {
+              ...log,
+              output: data.stdout || (data.stderr ? `Error Output:\n${data.stderr}` : 'Command completed with no output.'),
+              isError: !!data.stderr
+            };
+          }
+          return log;
+        }));
+        if (data.currentCwd) {
+          const trimmedCmd = commandToRun.trim();
+          if (trimmedCmd.startsWith('cd ')) {
+            const dest = trimmedCmd.substring(3).trim();
+            setTerminalCwd(prev => {
+              if (dest.startsWith('/')) return dest;
+              return prev === '.' ? dest : `${prev}/${dest}`;
+            });
+          }
+        }
+      } else {
+        setTerminalLogs(prev => prev.map((log, idx) => {
+          if (idx === prev.length - 1) {
+            return {
+              ...log,
+              output: data.error || data.stderr || 'Execution failed.',
+              isError: true
+            };
+          }
+          return log;
+        }));
+      }
+    } catch (err: any) {
+      setTerminalLogs(prev => prev.map((log, idx) => {
+        if (idx === prev.length - 1) {
+          return {
+            ...log,
+            output: `Network Connection Error: ${err.message || 'Cannot reach local NAS backend container. Check your OMV connection setup.'}`,
+            isError: true
+          };
+        }
+        return log;
+      }));
+    } finally {
+      setTerminalLoading(false);
+      setTerminalInput('');
+    }
+  };
+
   // --- FIREBASE & BACKEND SETTINGS TOGGLER ---
   const handleSaveCustomFirebaseSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2175,21 +2258,23 @@ export default function App() {
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                     {pinnedApplets.map(app => {
+                      const cardAccent = ACCENT_COLORS.find(c => c.value === app.accentColor) || ACCENT_COLORS[0];
                       return (
-                        <div
+                        <motion.div
+                          layout
                           key={app.id}
                           onClick={() => handleOpenApplet(app)}
-                          className="group relative bg-[#161616] border border-white/10 hover:border-white/20 p-6 flex flex-col justify-between transition-all duration-200 hover:-translate-y-1 hover:shadow-2xl overflow-hidden cursor-pointer"
+                          className={`group relative bg-[#161616] border ${cardAccent.border} p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl overflow-hidden cursor-pointer`}
                         >
                           <div className="space-y-4">
                             <div className="flex justify-between items-start">
-                              <div className="w-10 h-10 bg-white/5 border border-white/10 flex items-center justify-center text-xl">
+                              <div className={`w-10 h-10 ${cardAccent.bg} border ${cardAccent.border} flex items-center justify-center text-xl`}>
                                 {app.icon}
                               </div>
-                              <span className="text-[9px] px-2 py-1 bg-emerald-500/10 text-emerald-500 uppercase font-mono border border-emerald-500/20">Pinned</span>
+                              <span className={`text-[9px] px-2 py-1 ${cardAccent.bg} ${cardAccent.text} uppercase font-mono border ${cardAccent.border}`}>Pinned</span>
                             </div>
                             <div>
-                              <h3 className="text-base font-serif italic text-white leading-snug group-hover:text-emerald-400 transition-colors">{app.name}</h3>
+                              <h3 className={`text-base font-serif italic text-white leading-snug group-hover:${cardAccent.text} transition-colors`}>{app.name}</h3>
                               <span className="text-[9px] uppercase tracking-wider text-white/30 block mt-1 font-mono">{app.category}</span>
                               <p className="text-xs text-white/40 mt-3 leading-relaxed line-clamp-2 h-10">
                                 {app.description}
@@ -2199,7 +2284,48 @@ export default function App() {
 
                           {/* Footer details */}
                           <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between text-[10px] font-mono text-white/30">
-                            <span className="truncate max-w-[100px] text-white/25">ID: {app.id.substring(0, 8).toUpperCase()}</span>
+                            <div className="flex flex-col gap-1 shrink-0">
+                              <span className="truncate max-w-[100px] text-white/25 text-[9px]">ID: {app.id.substring(0, 8).toUpperCase()}</span>
+                              {/* Color custom dot selector */}
+                              <div className="flex items-center gap-1 mt-1">
+                                {ACCENT_COLORS.map(c => {
+                                  const isSelected = app.accentColor === c.value;
+                                  return (
+                                    <button
+                                      key={c.value}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const updated = applets.map(a => a.id === app.id ? { ...a, accentColor: c.value } : a);
+                                        setApplets(updated);
+                                        await syncAppletsToStorage(updated);
+                                        const activeDb = customFirebaseActive ? customDb : db;
+                                        if (currentUser && activeDb) {
+                                          try {
+                                            await setDoc(doc(activeDb, 'applets', app.id), { accentColor: c.value }, { merge: true });
+                                          } catch (err) {
+                                            console.warn('Firestore card color sync error:', err);
+                                          }
+                                        }
+                                      }}
+                                      className={`w-2 h-2 rounded-full cursor-pointer transition-all ${
+                                        isSelected ? 'ring-1 ring-white scale-125 opacity-100' : 'opacity-25 hover:opacity-100'
+                                      }`}
+                                      style={{
+                                        backgroundColor: c.value === 'indigo' ? '#818cf8' :
+                                                         c.value === 'rose' ? '#f43f5e' :
+                                                         c.value === 'emerald' ? '#10b981' :
+                                                         c.value === 'sky' ? '#38bdf8' :
+                                                         c.value === 'amber' ? '#f59e0b' :
+                                                         c.value === 'violet' ? '#a78bfa' :
+                                                         c.value === 'red' ? '#ef4444' :
+                                                         c.value === 'teal' ? '#14b8a6' : '#818cf8'
+                                      }}
+                                      title={`Set card color to ${c.name}`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            </div>
                             <div className="flex items-center gap-3">
                               <div className="flex items-center border border-white/5 bg-black/40 px-1.5 py-0.5 gap-1.5 mr-1 text-[11px] font-bold">
                                 <button
@@ -2238,7 +2364,7 @@ export default function App() {
                               </button>
                             </div>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })}
                   </div>
@@ -2253,21 +2379,23 @@ export default function App() {
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                     {remainingApplets.map(app => {
+                      const cardAccent = ACCENT_COLORS.find(c => c.value === app.accentColor) || ACCENT_COLORS[0];
                       return (
-                        <div
+                        <motion.div
+                          layout
                           key={app.id}
                           onClick={() => handleOpenApplet(app)}
-                          className="group relative bg-[#161616] border border-white/10 hover:border-white/20 p-6 flex flex-col justify-between transition-all duration-200 hover:-translate-y-1 hover:shadow-2xl overflow-hidden cursor-pointer"
+                          className={`group relative bg-[#161616] border ${cardAccent.border} p-6 flex flex-col justify-between transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl overflow-hidden cursor-pointer`}
                         >
                           <div className="space-y-4">
                             <div className="flex justify-between items-start">
-                              <div className="w-10 h-10 bg-white/5 border border-white/10 flex items-center justify-center text-xl">
+                              <div className={`w-10 h-10 ${cardAccent.bg} border ${cardAccent.border} flex items-center justify-center text-xl`}>
                                 {app.icon}
                               </div>
-                              <span className="text-[9px] px-2 py-1 bg-white/5 text-white/40 uppercase font-mono border border-white/10">Active</span>
+                              <span className={`text-[9px] px-2 py-1 bg-white/5 ${cardAccent.text} uppercase font-mono border ${cardAccent.border}`}>Active</span>
                             </div>
                             <div>
-                              <h3 className="text-base font-serif italic text-white leading-snug group-hover:text-emerald-400 transition-colors">{app.name}</h3>
+                              <h3 className={`text-base font-serif italic text-white leading-snug group-hover:${cardAccent.text} transition-colors`}>{app.name}</h3>
                               <span className="text-[9px] uppercase tracking-wider text-white/30 block mt-1 font-mono">{app.category}</span>
                               <p className="text-xs text-white/40 mt-3 leading-relaxed line-clamp-2 h-10">
                                 {app.description}
@@ -2277,7 +2405,48 @@ export default function App() {
 
                           {/* Footer details */}
                           <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between text-[10px] font-mono text-white/30">
-                            <span className="truncate max-w-[100px] text-white/25">ID: {app.id.substring(0, 8).toUpperCase()}</span>
+                            <div className="flex flex-col gap-1 shrink-0">
+                              <span className="truncate max-w-[100px] text-white/25 text-[9px]">ID: {app.id.substring(0, 8).toUpperCase()}</span>
+                              {/* Color custom dot selector */}
+                              <div className="flex items-center gap-1 mt-1">
+                                {ACCENT_COLORS.map(c => {
+                                  const isSelected = app.accentColor === c.value;
+                                  return (
+                                    <button
+                                      key={c.value}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const updated = applets.map(a => a.id === app.id ? { ...a, accentColor: c.value } : a);
+                                        setApplets(updated);
+                                        await syncAppletsToStorage(updated);
+                                        const activeDb = customFirebaseActive ? customDb : db;
+                                        if (currentUser && activeDb) {
+                                          try {
+                                            await setDoc(doc(activeDb, 'applets', app.id), { accentColor: c.value }, { merge: true });
+                                          } catch (err) {
+                                            console.warn('Firestore card color sync error:', err);
+                                          }
+                                        }
+                                      }}
+                                      className={`w-2 h-2 rounded-full cursor-pointer transition-all ${
+                                        isSelected ? 'ring-1 ring-white scale-125 opacity-100' : 'opacity-25 hover:opacity-100'
+                                      }`}
+                                      style={{
+                                        backgroundColor: c.value === 'indigo' ? '#818cf8' :
+                                                         c.value === 'rose' ? '#f43f5e' :
+                                                         c.value === 'emerald' ? '#10b981' :
+                                                         c.value === 'sky' ? '#38bdf8' :
+                                                         c.value === 'amber' ? '#f59e0b' :
+                                                         c.value === 'violet' ? '#a78bfa' :
+                                                         c.value === 'red' ? '#ef4444' :
+                                                         c.value === 'teal' ? '#14b8a6' : '#818cf8'
+                                      }}
+                                      title={`Set card color to ${c.name}`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            </div>
                             <div className="flex items-center gap-3">
                               <div className="flex items-center border border-white/5 bg-black/40 px-1.5 py-0.5 gap-1.5 mr-1 text-[11px] font-bold font-mono">
                                 <button
@@ -2316,7 +2485,7 @@ export default function App() {
                               </button>
                             </div>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })}
                   </div>
@@ -3096,6 +3265,17 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => setSettingsTab('terminal')}
+                className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
+                  settingsTab === 'terminal' 
+                    ? 'border-white text-white bg-white/5' 
+                    : 'border-transparent text-white/40 hover:text-white/80'
+                }`}
+              >
+                NAS Terminal
+              </button>
+              <button
+                type="button"
                 onClick={() => setSettingsTab('system')}
                 className={`flex-1 py-3 px-4 border-b-2 font-bold text-center transition-all cursor-pointer ${
                   settingsTab === 'system' 
@@ -3246,6 +3426,120 @@ services:
                       Hosting your own custom NAS container prepares your dashboard to host and launch complex non-TSX applets (native HTML index files, compiled SPA assets, and custom executable scripts) from local storage directories in upcoming iterations!
                     </p>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'terminal' && (
+              <div className="p-6 space-y-4 text-xs font-mono overflow-y-auto flex flex-col min-h-0 max-h-[70vh]">
+                <div className="bg-black/40 p-4 border border-white/5 space-y-2 rounded-none">
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold uppercase tracking-widest text-[9px] border-b border-white/5 pb-1.5">
+                    <Server className="w-4 h-4" />
+                    NAS Console Shell Terminal
+                  </div>
+                  <p className="text-[10px] text-white/50 font-sans leading-relaxed">
+                    Direct command execution inside your dashboard container or OMV NAS share. Run system diagnostics, check MergerFS mount health, or manage NFS paths directly.
+                  </p>
+                  <div className="flex items-center gap-1.5 text-[9px] text-white/40">
+                    <span className="font-bold">CURRENT WORKDIR:</span>
+                    <span className="text-emerald-400 font-bold font-mono">{terminalCwd}</span>
+                  </div>
+                </div>
+
+                {/* Preset Commands */}
+                <div className="space-y-1.5">
+                  <span className="text-[9px] font-bold text-white/40 block uppercase tracking-widest">Quick NAS Presets</span>
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => runTerminalCommand('df -h')}
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition text-left cursor-pointer font-mono"
+                    >
+                      📁 Storage Free (df -h)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runTerminalCommand('docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"')}
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition text-left cursor-pointer font-mono"
+                    >
+                      🐳 Docker Containers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runTerminalCommand('mount | grep -iE "mergerfs|nfs|smb|fuse" || echo "No active NFS/MergerFS mount detected"') }
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition text-left cursor-pointer font-mono"
+                    >
+                      🔄 NFS/MergerFS Health
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runTerminalCommand('ls -la')}
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition text-left cursor-pointer font-mono"
+                    >
+                      📂 List Workspace Files
+                    </button>
+                  </div>
+                </div>
+
+                {/* Terminal screen */}
+                <div className="flex flex-col border border-white/10 bg-black overflow-hidden rounded-none h-64 min-h-[16rem]">
+                  <div className="bg-[#0e0e0e] px-3 py-1.5 border-b border-white/5 flex items-center justify-between text-[9px] text-white/40 font-mono">
+                    <span>bash - ssh://nas-container</span>
+                    <button
+                      type="button"
+                      onClick={() => setTerminalLogs([{ command: '# clear', output: 'Console cleared.', isError: false, timestamp: new Date().toLocaleTimeString() }])}
+                      className="text-[9px] hover:text-white cursor-pointer"
+                    >
+                      [Clear Screen]
+                    </button>
+                  </div>
+                  
+                  <div className="flex-1 p-3 overflow-y-auto space-y-3 font-mono text-[10px] leading-relaxed selection:bg-white/10">
+                    {terminalLogs.map((log, idx) => (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex justify-between items-center text-[9px] text-white/30 border-b border-white/5 pb-0.5">
+                          <span className="text-indigo-400 font-bold">$ {log.command}</span>
+                          <span>{log.timestamp}</span>
+                        </div>
+                        <pre className={`whitespace-pre-wrap font-mono break-all leading-normal ${
+                          log.isError ? 'text-red-400 font-medium' : 'text-neutral-300'
+                        }`}>
+                          {log.output}
+                        </pre>
+                      </div>
+                    ))}
+                    {terminalLoading && (
+                      <div className="text-emerald-400 animate-pulse flex items-center gap-2">
+                        <span>●</span> Running shell command...
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Input form */}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      runTerminalCommand(terminalInput);
+                    }}
+                    className="border-t border-white/5 bg-[#0e0e0e] flex items-center p-2 gap-2"
+                  >
+                    <span className="text-indigo-400 font-bold font-mono pl-1 shrink-0">$</span>
+                    <input
+                      type="text"
+                      value={terminalInput}
+                      onChange={(e) => setTerminalInput(e.target.value)}
+                      disabled={terminalLoading}
+                      placeholder="Type command (e.g., ls -la /mnt/mergerfs)..."
+                      className="flex-1 bg-transparent border-none text-white text-[11px] font-mono focus:outline-none placeholder:text-white/20 disabled:opacity-50"
+                    />
+                    <button
+                      type="submit"
+                      disabled={terminalLoading || !terminalInput.trim()}
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-bold text-[10px] uppercase tracking-wider rounded-none transition cursor-pointer"
+                    >
+                      Execute
+                    </button>
+                  </form>
                 </div>
               </div>
             )}
