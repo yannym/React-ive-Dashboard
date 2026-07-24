@@ -3,11 +3,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests
+# Copy dependency manifests (including lockfile)
 COPY package.json package-lock.json* ./
 
-# Install dependencies (including devDependencies required for build and runtime esbuild)
-RUN npm ci || npm install
+# Install all dependencies (including devDependencies required for build)
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Copy application source
 COPY . .
@@ -23,8 +23,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Copy all files and node_modules from builder to preserve full environment and dynamic component compilation capabilities
-COPY --from=builder /app /app
+# Copy dependency manifests and package-lock.json into runtime stage
+COPY package.json package-lock.json* ./
+
+# Install production dependencies using --omit=dev (replaces deprecated --only=production)
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev || npm install --omit=dev; else npm install --omit=dev; fi
+
+# Copy compiled build output and server entry point
+COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
