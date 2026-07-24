@@ -5,7 +5,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Automatically check and pull the latest base image during builds
+      pull: true
     container_name: applet-cockpit
+    # Ensures docker compose up checks/rebuilds the service after docker compose down
+    pull_policy: build
     ports:
       - "3000:3000"
     environment:
@@ -13,3 +17,23 @@ services:
       - NODE_ENV=production
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     restart: unless-stopped
+    # Docker Compose Watch configuration to trigger automatic rebuilds on source changes
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+          ignore:
+            - node_modules/
+            - dist/
+            - .git/
+
+  # Watchtower container service to monitor and automatically update running images
+  watchtower:
+    image: containrrr/watchtower
+    container_name: applet-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup
+    profiles:
+      - auto-update
