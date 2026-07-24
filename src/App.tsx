@@ -41,7 +41,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Applet, OpenMode, SandboxConfig, FirebaseConnectionDetails } from './types';
+import { Applet, AppletSetting, OpenMode, SandboxConfig, FirebaseConnectionDetails } from './types';
 import { BUILT_IN_APPLETS, AVAILABLE_CATEGORIES, ACCENT_COLORS, POPULAR_LAUNCH_ICONS } from './data/builtInApplets';
 import { 
   QuickNotesApp, 
@@ -55,6 +55,8 @@ import { AppletErrorBoundary } from './components/AppletErrorBoundary';
 import { TiledWorkspace } from './components/TiledWorkspace';
 import { SystemConsoleModal } from './components/SystemConsoleModal';
 import { GeminiCopilot } from './components/GeminiCopilot';
+import { FluidScreensaver } from './components/FluidScreensaver';
+import { PerformanceMetricsCard } from './components/PerformanceMetricsCard';
 import { listFiles, readFile, writeFile, deleteFile, getBackendUrl } from './lib/filesystem';
 import { 
   db, 
@@ -204,6 +206,17 @@ export default function App() {
     return saved !== null ? saved === 'true' : true;
   });
 
+  // --- FLUID SCREENSAVER STATES ---
+  const [screensaverTimeout, setScreensaverTimeout] = useState<number>(() => {
+    const saved = localStorage.getItem('screensaver_timeout');
+    return saved ? parseInt(saved, 10) : 60;
+  });
+  const [isScreensaverEnabled, setIsScreensaverEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('screensaver_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [isScreensaverActive, setIsScreensaverActive] = useState<boolean>(false);
+
   // --- SYSTEM LOGS CONSOLE STATE ---
   interface SystemLog {
     id: string;
@@ -271,6 +284,37 @@ export default function App() {
       window.removeEventListener('unhandledrejection', handleRejection);
     };
   }, [addSystemLog]);
+
+  // Idle check for Screensaver
+  useEffect(() => {
+    if (!isScreensaverEnabled || isScreensaverActive) return;
+
+    let lastActiveTime = Date.now();
+
+    const resetTimer = () => {
+      lastActiveTime = Date.now();
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
+    events.forEach(event => {
+      window.addEventListener(event, resetTimer, { passive: true });
+    });
+
+    const interval = setInterval(() => {
+      const elapsedSeconds = (Date.now() - lastActiveTime) / 1000;
+      if (elapsedSeconds >= screensaverTimeout) {
+        setIsScreensaverActive(true);
+        addSystemLog('info', 'system', `Screensaver activated after ${screensaverTimeout}s of idle time.`);
+      }
+    }, 1000);
+
+    return () => {
+      events.forEach(event => {
+        window.removeEventListener(event, resetTimer);
+      });
+      clearInterval(interval);
+    };
+  }, [isScreensaverEnabled, isScreensaverActive, screensaverTimeout, addSystemLog]);
 
   // --- IN-BROWSER / REMOTE APPLET INSTALLER CONTROLLERS ---
   const checkDependencies = (code: string) => {
@@ -481,6 +525,52 @@ export default function App() {
     };
   }, [addSystemLog, missingDeps, installAppletData]);
 
+  // Listen for dynamic Applet Settings Registration and Requests
+  useEffect(() => {
+    const handleAppSettingsMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data) return;
+
+      if (data.type === 'REGISTER_SETTINGS' && Array.isArray(data.settings)) {
+        const targetId = data.appletId || activeApplet?.id;
+        if (targetId) {
+          setApplets(prev => {
+            const newList = prev.map(app => {
+              if (app.id === targetId) {
+                const existingSettings = app.customSettings || [];
+                const mergedSettings = data.settings.map((newS: any) => {
+                  const matched = existingSettings.find((exS: any) => exS.key === newS.key);
+                  return matched ? { ...newS, value: matched.value } : newS;
+                });
+                return { ...app, customSettings: mergedSettings };
+              }
+              return app;
+            });
+            syncAppletsToStorage(newList);
+            return newList;
+          });
+          addSystemLog('info', 'system', `Registered dynamic custom settings schema for applet.`);
+        }
+      }
+
+      if (data.type === 'REQUEST_SETTINGS') {
+        const targetId = data.appletId || activeApplet?.id;
+        if (targetId) {
+          const app = applets.find(a => a.id === targetId);
+          if (app && app.customSettings) {
+            (event.source as WindowProxy)?.postMessage({
+              type: 'SETTINGS_CHANGED',
+              settings: app.customSettings
+            }, { targetOrigin: '*' });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('message', handleAppSettingsMessage);
+    return () => window.removeEventListener('message', handleAppSettingsMessage);
+  }, [activeApplet, applets, addSystemLog]);
+
   // Automated Component discovery scanner
   const [didScanComponents, setDidScanComponents] = useState(false);
   
@@ -501,6 +591,7 @@ export default function App() {
     allowForms: true,
     allowPopups: true
   });
+  const [formCustomSettings, setFormCustomSettings] = useState<AppletSetting[]>([]);
 
   // Client Dashboard Metrics
   const [connectionType, setConnectionType] = useState<'local' | 'cloud'>(isConfigured ? 'cloud' : 'local');
@@ -1355,6 +1446,12 @@ export default function App() {
   };
 
   const handleOpenApplet = (applet: Applet) => {
+    if (applet.id === 'builtin-screensaver') {
+      setIsScreensaverActive(true);
+      addSystemLog('info', 'system', 'Fluid Screensaver manually triggered from Applet Catalog.');
+      return;
+    }
+
     if (applet.openMode === 'new_tab') {
       const urlToOpen = applet.isCustomEmbed ? '' : applet.url;
       if (urlToOpen) {
@@ -1651,7 +1748,8 @@ export default function App() {
       ownerId: resolvedOwner,
       createdAt: editingApplet ? editingApplet.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      sandboxConfig: formSandbox
+      sandboxConfig: formSandbox,
+      customSettings: formCustomSettings
     };
 
     // Update state lists
@@ -1677,6 +1775,21 @@ export default function App() {
     }
 
     await syncAppletsToStorage(updatedList);
+
+    // Sync active screensaver settings if screensaver applet was updated
+    if (newApplet.id === 'builtin-screensaver' || newApplet.customSettings) {
+      const enabledSetting = newApplet.customSettings?.find(s => s.key === 'screensaver_enabled');
+      if (enabledSetting !== undefined) {
+        setIsScreensaverEnabled(!!enabledSetting.value);
+        localStorage.setItem('screensaver_enabled', enabledSetting.value ? 'true' : 'false');
+      }
+      const timeoutSetting = newApplet.customSettings?.find(s => s.key === 'screensaver_timeout');
+      if (timeoutSetting !== undefined) {
+        const val = Math.max(3, parseInt(timeoutSetting.value, 10) || 60);
+        setScreensaverTimeout(val);
+        localStorage.setItem('screensaver_timeout', val.toString());
+      }
+    }
 
     // Sync cloud document
     if (connectionType === 'cloud' && currentUser && activeDb) {
@@ -1711,6 +1824,7 @@ export default function App() {
       allowForms: true,
       allowPopups: true
     });
+    setFormCustomSettings([]);
   };
 
   const handleTriggerEdit = (e: React.MouseEvent, applet: Applet) => {
@@ -1729,6 +1843,7 @@ export default function App() {
     if (applet.sandboxConfig) {
       setFormSandbox(applet.sandboxConfig);
     }
+    setFormCustomSettings(applet.customSettings || []);
     setShowConfigModal(true);
   };
 
@@ -2437,6 +2552,9 @@ export default function App() {
                 ))}
               </div>
 
+              {/* PERFORMANCE METRICS SUMMARY CARD */}
+              <PerformanceMetricsCard />
+
               {/* DYNAMIC ERROR WARNING BANNER */}
               {syncError && (
                 <div className="bg-amber-500/5 border border-amber-500/20 p-4 text-xs flex gap-3 text-amber-250 font-mono">
@@ -2900,6 +3018,18 @@ export default function App() {
                           title={activeApplet.name}
                           referrerPolicy="no-referrer"
                           className="w-full h-full border-0"
+                          onLoad={(e) => {
+                            if (activeApplet.customSettings) {
+                              try {
+                                e.currentTarget.contentWindow?.postMessage({
+                                  type: 'SETTINGS_CHANGED',
+                                  settings: activeApplet.customSettings
+                                }, '*');
+                              } catch (err) {
+                                console.warn('Could not post settings:', err);
+                              }
+                            }
+                          }}
                         />
                       </div>
                     )}
@@ -2920,6 +3050,18 @@ export default function App() {
                           sandbox="allow-scripts"
                           title={activeApplet.name}
                           className="w-full h-full border-0 bg-white"
+                          onLoad={(e) => {
+                            if (activeApplet.customSettings) {
+                              try {
+                                e.currentTarget.contentWindow?.postMessage({
+                                  type: 'SETTINGS_CHANGED',
+                                  settings: activeApplet.customSettings
+                                }, '*');
+                              } catch (err) {
+                                console.warn('Could not post settings:', err);
+                              }
+                            }
+                          }}
                         />
                       </div>
                     )}
@@ -3187,6 +3329,117 @@ export default function App() {
                       />
                       Allow Popups
                     </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Dynamic Applet Configurable Settings */}
+              {formCustomSettings && formCustomSettings.length > 0 && (
+                <div className="space-y-4 bg-emerald-500/5 p-4 border border-emerald-500/10 rounded-none">
+                  <div className="flex items-center gap-1.5 border-b border-emerald-500/15 pb-2">
+                    <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 font-mono">
+                      Configurable Applet Settings
+                    </span>
+                  </div>
+                  <div className="space-y-3.5">
+                    {formCustomSettings.map((setting, idx) => {
+                      return (
+                        <div key={setting.key} className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-white/70 font-mono text-[10px]">{setting.label}</span>
+                            {(setting.type === 'number' || setting.type === 'range') && (
+                              <span className="text-emerald-400 font-bold font-mono text-[10px]">
+                                {setting.value}
+                              </span>
+                            )}
+                          </div>
+
+                          {setting.type === 'boolean' && (
+                            <label className="relative inline-flex items-center cursor-pointer select-none mt-1">
+                              <input 
+                                type="checkbox" 
+                                checked={!!setting.value}
+                                onChange={(e) => {
+                                  const updated = [...formCustomSettings];
+                                  updated[idx] = { ...setting, value: e.target.checked };
+                                  setFormCustomSettings(updated);
+                                }}
+                                className="sr-only peer"
+                              />
+                              <div className="w-8 h-4 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-[14px] after:transition-all peer-checked:bg-emerald-500"></div>
+                            </label>
+                          )}
+
+                          {setting.type === 'text' && (
+                            <input
+                              type="text"
+                              value={setting.value || ''}
+                              onChange={(e) => {
+                                const updated = [...formCustomSettings];
+                                updated[idx] = { ...setting, value: e.target.value };
+                                setFormCustomSettings(updated);
+                              }}
+                              className="w-full px-3 py-2 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
+                            />
+                          )}
+
+                          {setting.type === 'number' && (
+                            <input
+                              type="number"
+                              min={setting.min}
+                              max={setting.max}
+                              step={setting.step || 1}
+                              value={setting.value !== undefined ? setting.value : ''}
+                              onChange={(e) => {
+                                const updated = [...formCustomSettings];
+                                updated[idx] = { ...setting, value: parseInt(e.target.value, 10) || 0 };
+                                setFormCustomSettings(updated);
+                              }}
+                              className="w-full px-3 py-2 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
+                            />
+                          )}
+
+                          {setting.type === 'range' && (
+                            <div className="space-y-1">
+                              <input
+                                type="range"
+                                min={setting.min !== undefined ? setting.min : 0}
+                                max={setting.max !== undefined ? setting.max : 100}
+                                step={setting.step || 1}
+                                value={setting.value !== undefined ? setting.value : 0}
+                                onChange={(e) => {
+                                  const updated = [...formCustomSettings];
+                                  updated[idx] = { ...setting, value: parseInt(e.target.value, 10) || 0 };
+                                  setFormCustomSettings(updated);
+                                }}
+                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                              />
+                              <div className="flex justify-between text-[8px] text-white/30 font-mono">
+                                <span>{setting.min}</span>
+                                <span>{setting.max}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {setting.type === 'select' && (
+                            <select
+                              value={setting.value || ''}
+                              onChange={(e) => {
+                                const updated = [...formCustomSettings];
+                                updated[idx] = { ...setting, value: e.target.value };
+                                setFormCustomSettings(updated);
+                              }}
+                              className="w-full px-3 py-2 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs cursor-pointer"
+                            >
+                              {setting.options?.map(opt => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -3803,6 +4056,82 @@ services:
                       ? `Requests are proxied to your remote container: ${customBackendUrl}. Live TSX compilation and AI features execute remote file actions.`
                       : 'Running inside the safe local sandbox container. The integrated Express server (port 3000) handles compilation, AI interactions, and file management.'}
                   </p>
+                </div>
+
+                <div className="bg-black/40 p-4 border border-white/5 rounded-none space-y-4">
+                  <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Fluid Screensaver Settings</span>
+                  
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+                    <span className="text-white/60">Enable Screensaver</span>
+                    <label className="relative inline-flex items-center cursor-pointer select-none">
+                      <input 
+                        type="checkbox" 
+                        checked={isScreensaverEnabled}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setIsScreensaverEnabled(val);
+                          localStorage.setItem('screensaver_enabled', val ? 'true' : 'false');
+                          addSystemLog('info', 'system', `Screensaver ${val ? 'enabled' : 'disabled'}.`);
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-8 h-4 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-[14px] after:transition-all peer-checked:bg-emerald-500"></div>
+                    </label>
+                  </div>
+
+                  {isScreensaverEnabled && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-white/60">
+                        <span>Idle Timeout</span>
+                        <div className="flex items-center gap-1.5">
+                          <input 
+                            type="number"
+                            min="3"
+                            max="3600"
+                            value={screensaverTimeout}
+                            onChange={(e) => {
+                              const val = Math.max(3, parseInt(e.target.value, 10) || 5);
+                              setScreensaverTimeout(val);
+                              localStorage.setItem('screensaver_timeout', val.toString());
+                            }}
+                            className="w-16 px-2 py-0.5 bg-[#0A0A0A] border border-white/10 text-emerald-400 font-bold font-mono text-center text-xs focus:outline-none focus:border-emerald-500/50"
+                          />
+                          <span className="text-[10px] text-white/40 font-mono uppercase">Seconds</span>
+                        </div>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="5" 
+                        max="300" 
+                        step="5"
+                        value={screensaverTimeout}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          setScreensaverTimeout(val);
+                          localStorage.setItem('screensaver_timeout', val.toString());
+                        }}
+                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                      />
+                      <div className="flex justify-between text-[8px] text-white/30 font-mono">
+                        <span>5s</span>
+                        <span>1m</span>
+                        <span>3m</span>
+                        <span>5m</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsScreensaverActive(true);
+                      setShowSettingsModal(false);
+                      addSystemLog('info', 'system', 'Triggering screensaver preview.');
+                    }}
+                    className="w-full py-2 bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold tracking-wider uppercase transition cursor-pointer"
+                  >
+                    Preview Screensaver Now
+                  </button>
                 </div>
 
                 <div className="bg-[#1A1A1A] p-4 border border-white/10 text-center rounded-none font-bold text-white text-[10px] tracking-widest uppercase">
@@ -4914,6 +5243,11 @@ services:
         onWorkspaceChange={() => scanAndSyncDynamicComponents(applets)}
         addSystemLog={addSystemLog}
         appletsCount={applets.length}
+      />
+
+      <FluidScreensaver 
+        isActive={isScreensaverActive} 
+        onExit={() => setIsScreensaverActive(false)} 
       />
 
     </div>

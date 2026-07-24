@@ -7,6 +7,17 @@ export interface SandboxConfig {
   allowPopups: boolean;
 }
 
+export interface AppletSetting {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'boolean' | 'range' | 'select';
+  value: any;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { label: string; value: any }[];
+}
+
 export interface Applet {
   id: string;
   name: string;
@@ -26,6 +37,7 @@ export interface Applet {
   sandboxConfig?: SandboxConfig;
   orderIndex?: number;
   sourceCode?: string;
+  customSettings?: AppletSetting[];
 }
 
 export interface FirebaseConnectionDetails {

@@ -1,4 +1,4 @@
-import { Applet } from '../types';
+import { Applet, AppletSetting } from '../types';
 
 export const BUILT_IN_APPLETS: Applet[] = [
   {
@@ -15,7 +15,15 @@ export const BUILT_IN_APPLETS: Applet[] = [
     isPinned: true,
     ownerId: 'default',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    customSettings: [
+      { key: 'font_size', label: 'Font Size', type: 'select', value: 'normal', options: [
+        { label: 'Small', value: 'small' },
+        { label: 'Normal', value: 'normal' },
+        { label: 'Large', value: 'large' }
+      ]},
+      { key: 'autosave_enabled', label: 'Enable Autosave', type: 'boolean', value: true }
+    ]
   },
   {
     id: 'builtin-pomodoro',
@@ -31,7 +39,11 @@ export const BUILT_IN_APPLETS: Applet[] = [
     isPinned: true,
     ownerId: 'default',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    customSettings: [
+      { key: 'work_duration', label: 'Work Duration (m)', type: 'number', value: 25, min: 1, max: 120 },
+      { key: 'break_duration', label: 'Break Duration (m)', type: 'number', value: 5, min: 1, max: 60 }
+    ]
   },
   {
     id: 'builtin-canvas',
@@ -47,7 +59,10 @@ export const BUILT_IN_APPLETS: Applet[] = [
     isPinned: false,
     ownerId: 'default',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    customSettings: [
+      { key: 'brush_size', label: 'Default Brush Size', type: 'range', value: 5, min: 1, max: 50 }
+    ]
   },
   {
     id: 'builtin-json',
@@ -63,7 +78,10 @@ export const BUILT_IN_APPLETS: Applet[] = [
     isPinned: false,
     ownerId: 'default',
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    customSettings: [
+      { key: 'tab_size', label: 'Tab Indent Size', type: 'number', value: 2, min: 1, max: 8 }
+    ]
   },
   {
     id: 'builtin-calculator',
@@ -81,6 +99,26 @@ export const BUILT_IN_APPLETS: Applet[] = [
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   },
+  {
+    id: 'builtin-screensaver',
+    name: 'Fluid Screensaver',
+    description: 'Topographic flow-field dynamic screensaver with customizable idle timeout and mouse interactive dissolving.',
+    url: 'internal:screensaver',
+    isCustomEmbed: false,
+    icon: '🌌',
+    category: 'System',
+    tags: ['screensaver', 'visualizer', 'fluid', 'canvas'],
+    openMode: 'iframe',
+    accentColor: 'violet',
+    isPinned: true,
+    ownerId: 'default',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    customSettings: [
+      { key: 'screensaver_enabled', label: 'Enable Screensaver', type: 'boolean', value: true },
+      { key: 'screensaver_timeout', label: 'Idle Timeout (Seconds)', type: 'number', value: 60, min: 3, max: 3600 }
+    ]
+  }
 ];
 
 export const AVAILABLE_CATEGORIES = [
