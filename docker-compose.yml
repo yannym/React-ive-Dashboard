@@ -1,12 +1,7 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # Automatically pull the latest base image during builds
-      pull: true
+    build: .
     container_name: applet-cockpit
-    # Ensures docker compose up checks and rebuilds the service
     pull_policy: build
     ports:
       - "3000:3000"
