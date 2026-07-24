@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { exec } from "child_process";
 import { createServer as createViteServer } from "vite";
 import * as esbuild from "esbuild";
@@ -9,6 +10,15 @@ import { GoogleGenAI, Type } from "@google/genai";
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  let requestCountWindow = 0;
+  let windowStartTime = Date.now();
+
+  // Track request throughput for system metrics
+  app.use((req, res, next) => {
+    requestCountWindow++;
+    next();
+  });
 
   // CORS middleware to support cross-origin requests from external clients (e.g., GitHub Pages)
   app.use((req, res, next) => {
@@ -36,6 +46,45 @@ async function startServer() {
     }
     return resolvedPath;
   };
+
+  // Real-time system and process metrics endpoint
+  app.get("/api/system/metrics", (req, res) => {
+    try {
+      const mem = process.memoryUsage();
+      const heapUsedMB = Math.round(mem.heapUsed / (1024 * 1024));
+      const heapTotalMB = Math.round(mem.heapTotal / (1024 * 1024));
+      const rssMB = Math.round(mem.rss / (1024 * 1024));
+      const totalMemMB = Math.round(os.totalmem() / (1024 * 1024));
+      const freeMemMB = Math.round(os.freemem() / (1024 * 1024));
+      const loadAvg = os.loadavg()[0] || 0;
+
+      const now = Date.now();
+      const elapsedSec = Math.max(1, (now - windowStartTime) / 1000);
+      const reqPerMin = Math.round((requestCountWindow / elapsedSec) * 60);
+
+      if (elapsedSec > 60) {
+        requestCountWindow = 0;
+        windowStartTime = now;
+      }
+
+      res.json({
+        success: true,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        memoryMB: heapUsedMB,
+        heapTotalMB,
+        rssMB,
+        totalMemMB,
+        freeMemMB,
+        sessionLoad: Math.max(1, reqPerMin),
+        uptimeSec: Math.round(process.uptime()),
+        loadAvg: Number(loadAvg.toFixed(2)),
+        cpus: os.cpus().length,
+        platform: process.platform
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to fetch system metrics" });
+    }
+  });
 
   // API Endpoint to scan /src/components folder and automatically discover any .tsx files
   app.get("/api/list-components", (req, res) => {
