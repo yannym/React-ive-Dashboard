@@ -102,12 +102,37 @@ export function getBackendUrl(apiPath: string): string {
     ? activeCustomUrl.trim()
     : autoDetectedBackendUrl;
 
+  const normalizedApiPath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+
   if (activeBaseUrl) {
     const baseUrl = activeBaseUrl.replace(/\/$/, ""); // strip trailing slash
-    const relativePath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
-    return `${baseUrl}${relativePath}`;
+    if (typeof window !== "undefined" && window.location && window.location.origin) {
+      if (baseUrl === window.location.origin.replace(/\/$/, "")) {
+        return normalizedApiPath;
+      }
+    }
+    return `${baseUrl}${normalizedApiPath}`;
   }
-  return apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+  return normalizedApiPath;
+}
+
+export async function backendFetch(apiPath: string, init?: RequestInit): Promise<Response> {
+  const targetUrl = getBackendUrl(apiPath);
+  const relativePath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+
+  try {
+    const res = await fetch(targetUrl, init);
+    return res;
+  } catch (err) {
+    if (targetUrl !== relativePath) {
+      console.warn(`[filesystem] Backend fetch to ${targetUrl} failed, falling back to relative path ${relativePath}`);
+      // Auto-clear invalid custom backend url if it caused the network error
+      localStorage.removeItem("applet_dashboard_custom_backend_url");
+      autoDetectedBackendUrl = null;
+      return await fetch(relativePath, init);
+    }
+    throw err;
+  }
 }
 
 export async function detectFallbackMode(): Promise<boolean> {

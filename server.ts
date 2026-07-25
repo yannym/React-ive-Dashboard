@@ -721,13 +721,34 @@ async function startServer() {
 
   const writeFileHelper = (targetPath: string, content: string) => {
     try {
-      const safePath = getSafePath(targetPath);
+      let resolvedRelativePath = targetPath;
+      // Intelligently ensure TSX component files land inside `src/components/` so the scanner registers them
+      if (
+        resolvedRelativePath.endsWith(".tsx") &&
+        !resolvedRelativePath.startsWith("src/components/") &&
+        !resolvedRelativePath.includes("/")
+      ) {
+        resolvedRelativePath = `src/components/${resolvedRelativePath}`;
+      } else if (
+        resolvedRelativePath.endsWith(".tsx") &&
+        resolvedRelativePath.startsWith("components/")
+      ) {
+        resolvedRelativePath = `src/${resolvedRelativePath}`;
+      }
+
+      const safePath = getSafePath(resolvedRelativePath);
       const parentDir = path.dirname(safePath);
       if (!fs.existsSync(parentDir)) {
         fs.mkdirSync(parentDir, { recursive: true });
       }
       fs.writeFileSync(safePath, content, "utf8");
-      return { success: true, path: targetPath, message: "File saved successfully." };
+
+      const isComponent = resolvedRelativePath.startsWith("src/components/");
+      return { 
+        success: true, 
+        path: resolvedRelativePath, 
+        message: `File saved successfully to ${resolvedRelativePath}. ${isComponent ? 'The component is automatically registered into the Applet Catalog.' : ''}` 
+      };
     } catch (e: any) {
       return { error: e.message || "Failed to write file" };
     }
@@ -759,9 +780,10 @@ async function startServer() {
 
       const systemInstruction = 
         "You are 'Gemini Copilot', an expert AI coding and system workspace assistant embedded in the Applet Cockpit Dashboard.\n" +
-        "You run inside a server-side container with access to workspace tools. " +
-        "If the user asks you to create or modify a custom React applet/component, save it to 'src/components/MyComponent.tsx' (or whatever filename makes sense). Always write valid TSX. Every custom component MUST use a default export (e.g., 'export default function MyComponent() { ... }').\n" +
-        "Do not explain your tools usage in long detail, just list files, read code, make edits, and then give a concise, helpful summary to the user. You are brilliant, fast, and helpful.";
+        "You run inside a server-side container with access to workspace tools (listFiles, readFile, writeFile).\n" +
+        "CRITICAL RULE FOR CREATING OR MODIFYING APPLETS/COMPONENTS:\n" +
+        "When the user asks you to build, create, or modify an applet/component, YOU MUST ACTUALLY CALL the 'writeFile' tool to save a TSX file into 'src/components/' (for example, 'src/components/MyNewApplet.tsx'). NEVER claim that you built an applet or registered it without actually invoking the 'writeFile' function call! Always write complete, valid TSX code with a default export (e.g. 'export default function MyComponent() { ... }').\n" +
+        "When you invoke 'writeFile' to save a file into 'src/components/Name.tsx', the server automatically scans and registers it as a runnable custom applet in the Applet Catalog list on the dashboard.";
 
       const tools: any[] = [];
       if (useTools) {

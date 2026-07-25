@@ -1747,18 +1747,31 @@ export default function App() {
     }
   }, [toast]);
 
-  // Automated Component discovery scanner
-  const scanAndSyncDynamicComponents = async (currentApplets: Applet[]) => {
+  // Automated Component discovery scanner with explicit forceUnpurge option
+  const scanAndSyncDynamicComponents = async (currentApplets: Applet[], forceUnpurge = false) => {
     try {
       const resp = await fetch(getBackendUrl('/api/list-components'));
-      if (!resp.ok) return;
+      if (!resp.ok) return { total: 0, newCount: 0 };
       const data = await resp.json();
       if (data.success && Array.isArray(data.components)) {
         let listChanged = false;
+        let newCount = 0;
         const updatedList = [...currentApplets];
 
         const purgedRaw = localStorage.getItem('applet_dashboard_purged_ids');
-        const purgedIds = purgedRaw ? JSON.parse(purgedRaw) : [];
+        let purgedIds: string[] = purgedRaw ? JSON.parse(purgedRaw) : [];
+
+        // If forceUnpurge is active (e.g., manual refresh or Gemini finished building),
+        // remove scanned component IDs from purgedIds so they re-appear in catalog
+        if (forceUnpurge) {
+          const scannedIds = data.components.map((c: any) => c.applet.id);
+          const updatedPurged = purgedIds.filter(pid => !scannedIds.includes(pid));
+          if (updatedPurged.length !== purgedIds.length) {
+            purgedIds = updatedPurged;
+            localStorage.setItem('applet_dashboard_purged_ids', JSON.stringify(purgedIds));
+            setPurgedIds(purgedIds);
+          }
+        }
 
         data.components.forEach((comp: any) => {
           if (purgedIds.includes(comp.applet.id)) return;
@@ -1773,6 +1786,7 @@ export default function App() {
               orderIndex: updatedList.length
             });
             listChanged = true;
+            newCount++;
           }
         });
 
@@ -1796,9 +1810,12 @@ export default function App() {
             }
           }
         }
+        return { total: data.components.length, newCount };
       }
+      return { total: 0, newCount: 0 };
     } catch (err) {
       console.error("Failed executing automated scan code:", err);
+      return { total: 0, newCount: 0 };
     }
   };
 
@@ -2340,6 +2357,23 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <button
+            onClick={async () => {
+              addSystemLog('info', 'scanner', 'User initiated manual applet catalog rescan...');
+              const res = await scanAndSyncDynamicComponents(applets, true);
+              if (res.newCount > 0) {
+                triggerToast(`Catalog rescan complete: Registered ${res.newCount} new applet(s)!`, 'success');
+              } else {
+                triggerToast(`Catalog rescan complete: ${res.total} TSX applet(s) synced & up-to-date.`, 'info');
+              }
+            }}
+            className="px-3.5 py-2 border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold font-mono tracking-wider transition flex items-center gap-1.5 cursor-pointer"
+            title="Rescan src/components for newly created or modified custom TSX applets"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">Refresh Applets</span>
+          </button>
 
           <button
             onClick={() => { setUploadError(null); setShowUploadModal(true); }}
@@ -5606,7 +5640,12 @@ services:
       )}
 
       <GeminiCopilot
-        onWorkspaceChange={() => scanAndSyncDynamicComponents(applets)}
+        onWorkspaceChange={async () => {
+          const res = await scanAndSyncDynamicComponents(applets, true);
+          if (res?.newCount && res.newCount > 0) {
+            triggerToast(`Workspace rescan: Automatically registered ${res.newCount} new applet(s)!`, 'success');
+          }
+        }}
         addSystemLog={addSystemLog}
         appletsCount={applets.length}
       />

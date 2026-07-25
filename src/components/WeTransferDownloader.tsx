@@ -5,6 +5,7 @@ import {
   FileArchive, 
   CheckCircle2, 
   AlertCircle, 
+  AlertTriangle,
   Loader2, 
   Trash2, 
   FolderDown, 
@@ -35,7 +36,7 @@ import {
   Zap,
   ExternalLink
 } from "lucide-react";
-import { getBackendUrl } from "../lib/filesystem";
+import { getBackendUrl, backendFetch } from "../lib/filesystem";
 
 interface StorageMountStatus {
   accessible: boolean;
@@ -151,6 +152,35 @@ export function WeTransferDownloader() {
   const [notifSuccessMsg, setNotifSuccessMsg] = useState<string | null>(null);
   const [notificationLogs, setNotificationLogs] = useState<any[]>([]);
 
+  // Enhanced Connection & Server API Error Diagnostic State
+  interface ConnectionDiagnostic {
+    type: "network" | "api";
+    message: string;
+    statusCode?: number;
+    timestamp: string;
+  }
+  const [connectionDiagnostic, setConnectionDiagnostic] = useState<ConnectionDiagnostic | null>(null);
+
+  // Helper to process fetch errors and categorize them
+  const handleFetchError = (err: any, endpoint: string) => {
+    console.warn(`Fetch error on endpoint ${endpoint}:`, err);
+    const errString = String(err?.message || err);
+    const isNetwork = 
+      err?.name === "TypeError" || 
+      errString.includes("Failed to fetch") || 
+      errString.includes("NetworkError") || 
+      errString.includes("ERR_CONNECTION") ||
+      errString.includes("Load failed");
+
+    setConnectionDiagnostic({
+      type: isNetwork ? "network" : "api",
+      message: isNetwork
+        ? `Network Connection Failure when reaching '${endpoint}'. The Express backend container or OMV gateway appears unreachable or offline.`
+        : `Server API Error on '${endpoint}': ${errString}`,
+      timestamp: new Date().toLocaleTimeString()
+    });
+  };
+
   // Ref to track notified jobs to prevent duplicate popups
   const notifiedJobIdsRef = useRef<Set<string>>(new Set());
 
@@ -234,12 +264,12 @@ export function WeTransferDownloader() {
   // Fetch Notification Config & Logs
   const fetchNotificationConfig = async () => {
     try {
-      const res = await fetch(getBackendUrl("/api/notifications/config"));
+      const res = await backendFetch("/api/notifications/config");
       if (res.ok) {
         const data = await res.json();
         setNotifConfig(data.config || {});
       }
-      const logsRes = await fetch(getBackendUrl("/api/notifications/logs"));
+      const logsRes = await backendFetch("/api/notifications/logs");
       if (logsRes.ok) {
         const logsData = await logsRes.json();
         setNotificationLogs(logsData.logs || []);
@@ -255,7 +285,7 @@ export function WeTransferDownloader() {
     setIsSavingNotif(true);
     setNotifSuccessMsg(null);
     try {
-      const res = await fetch(getBackendUrl("/api/notifications/config"), {
+      const res = await backendFetch("/api/notifications/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(notifConfig)
@@ -299,7 +329,7 @@ export function WeTransferDownloader() {
     }
 
     try {
-      await fetch(getBackendUrl("/api/notifications/test"), { method: "POST" });
+      await backendFetch("/api/notifications/test", { method: "POST" });
       setNotifSuccessMsg("Test notification dispatched to Email & Webhook channels!");
       setTimeout(() => setNotifSuccessMsg(null), 3500);
       fetchNotificationConfig();
@@ -311,7 +341,7 @@ export function WeTransferDownloader() {
   // Fetch Configured Storage Mounts & Auto-Discovered Docker Volumes
   const fetchMounts = async () => {
     try {
-      const res = await fetch(getBackendUrl("/api/mounts"));
+      const res = await backendFetch("/api/mounts");
       if (res.ok) {
         const data = await res.json();
         setMounts(data.mounts || []);
@@ -319,26 +349,35 @@ export function WeTransferDownloader() {
           const defaultMount = data.mounts.find((m: StorageMount) => m.isDefault) || data.mounts[0];
           setSelectedMountPath(defaultMount.path);
         }
+        setConnectionDiagnostic(null);
+      } else {
+        setConnectionDiagnostic({
+          type: "api",
+          message: `Backend API endpoint '/api/mounts' returned HTTP status ${res.status} (${res.statusText || "Server Error"}).`,
+          statusCode: res.status,
+          timestamp: new Date().toLocaleTimeString()
+        });
       }
 
-      const dockerRes = await fetch(getBackendUrl("/api/mounts/docker-auto-discover"));
+      const dockerRes = await backendFetch("/api/mounts/docker-auto-discover");
       if (dockerRes.ok) {
         const dockerData = await dockerRes.json();
         setDiscoveredDockerMounts(dockerData.discovered || []);
       }
     } catch (err) {
-      console.warn("Failed to fetch storage mounts:", err);
+      handleFetchError(err, "/api/mounts");
     }
   };
 
   // Poll background download jobs & trigger notifications when jobs finish
   const fetchJobs = async () => {
     try {
-      const res = await fetch(getBackendUrl("/api/wetransfer/jobs"));
+      const res = await backendFetch("/api/wetransfer/jobs");
       if (res.ok) {
         const data = await res.json();
         const freshJobs: WeTransferJob[] = data.jobs || [];
         setJobs(freshJobs);
+        setConnectionDiagnostic(null);
 
         // Check for completed or errored jobs to notify
         freshJobs.forEach((job) => {
@@ -346,9 +385,16 @@ export function WeTransferDownloader() {
             triggerSystemNotification(job);
           }
         });
+      } else {
+        setConnectionDiagnostic({
+          type: "api",
+          message: `Backend API endpoint '/api/wetransfer/jobs' returned HTTP status ${res.status} (${res.statusText || "Server Error"}).`,
+          statusCode: res.status,
+          timestamp: new Date().toLocaleTimeString()
+        });
       }
     } catch (err) {
-      console.warn("Failed to fetch wetransfer jobs:", err);
+      handleFetchError(err, "/api/wetransfer/jobs");
     }
   };
 
@@ -356,12 +402,13 @@ export function WeTransferDownloader() {
   const fetchFiles = async () => {
     try {
       const targetDir = useCustomPath ? customPathInput : selectedMountPath;
-      const res = await fetch(getBackendUrl(`/api/wetransfer/files?targetDir=${encodeURIComponent(targetDir)}`));
+      const res = await backendFetch(`/api/wetransfer/files?targetDir=${encodeURIComponent(targetDir)}`);
       if (res.ok) {
         const data = await res.json();
         setDownloadedFiles(data.files || []);
       }
     } catch (err) {
+      // Quietly process fetch error without cluttering if jobs/mounts already caught it
       console.warn("Failed to fetch downloaded files:", err);
     }
   };
@@ -394,7 +441,7 @@ export function WeTransferDownloader() {
 
     try {
       const outputDir = activeTargetPath;
-      const res = await fetch(getBackendUrl("/api/wetransfer/download"), {
+      const res = await backendFetch("/api/wetransfer/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -426,7 +473,7 @@ export function WeTransferDownloader() {
     setIsTestingMount(true);
     setMountTestResult(null);
     try {
-      const res = await fetch(getBackendUrl("/api/mounts/test"), {
+      const res = await backendFetch("/api/mounts/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: target })
@@ -450,7 +497,7 @@ export function WeTransferDownloader() {
     if (!newMountName.trim() || !newMountPath.trim()) return;
 
     try {
-      const res = await fetch(getBackendUrl("/api/mounts"), {
+      const res = await backendFetch("/api/mounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -476,7 +523,7 @@ export function WeTransferDownloader() {
 
   const handleImportDockerMount = async (discovered: DiscoveredDockerMount) => {
     try {
-      const res = await fetch(getBackendUrl("/api/mounts/docker-import"), {
+      const res = await backendFetch("/api/mounts/docker-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -497,7 +544,7 @@ export function WeTransferDownloader() {
 
   const handleDeleteMount = async (mountId: string) => {
     try {
-      await fetch(getBackendUrl(`/api/mounts/${mountId}`), { method: "DELETE" });
+      await backendFetch(`/api/mounts/${mountId}`, { method: "DELETE" });
       fetchMounts();
     } catch (err) {
       console.error("Failed to delete mount:", err);
@@ -506,7 +553,7 @@ export function WeTransferDownloader() {
 
   const handleDeleteJob = async (jobId: string) => {
     try {
-      await fetch(getBackendUrl(`/api/wetransfer/jobs/${jobId}`), {
+      await backendFetch(`/api/wetransfer/jobs/${jobId}`, {
         method: "DELETE"
       });
       fetchJobs();
@@ -529,6 +576,69 @@ export function WeTransferDownloader() {
 
   return (
     <div className="space-y-6">
+      {/* Connection & API Error Diagnostic Banner */}
+      {connectionDiagnostic && (
+        <div className="bg-[#180A0C] border-2 border-red-500/40 rounded-xl p-4 font-mono text-xs text-white shadow-2xl space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5 text-red-400 font-bold">
+              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 animate-pulse" />
+              <span>
+                {connectionDiagnostic.type === "network"
+                  ? "Network / Docker Connection Error (ERR_CONNECTION_REFUSED)"
+                  : `Server API Error ${connectionDiagnostic.statusCode ? `(HTTP ${connectionDiagnostic.statusCode})` : ""}`}
+              </span>
+            </div>
+            <span className="text-[10px] text-white/40">{connectionDiagnostic.timestamp}</span>
+          </div>
+
+          <p className="text-white/80 leading-relaxed text-[11px] bg-black/50 p-3 border border-red-500/20 rounded-lg">
+            {connectionDiagnostic.message}
+          </p>
+
+          {connectionDiagnostic.type === "network" && (
+            <div className="space-y-2 text-[11px] bg-black/60 p-3.5 border border-amber-500/20 rounded-lg text-amber-200/90">
+              <div className="font-bold text-amber-300 flex items-center gap-1.5 text-xs">
+                <Server className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Troubleshooting OMV / Docker Container Connection:</span>
+              </div>
+              <ul className="list-disc list-inside space-y-1.5 text-white/70 pl-1 text-[11px]">
+                <li>
+                  <strong className="text-white">Check Container Status:</strong> Ensure your backend Docker container (e.g. <code className="text-emerald-400 px-1 bg-white/5 rounded">architect-backend</code> or <code className="text-emerald-400 px-1 bg-white/5 rounded">omv-nas-gateway</code>) is actively running in OpenMediaVault / Docker Desktop.
+                </li>
+                <li>
+                  <strong className="text-white">Port Mapping & Gateway:</strong> Verify that port 3000 is mapped correctly and no firewall/proxy rule is blocking local loopback requests.
+                </li>
+                <li>
+                  <strong className="text-white">Inspect Telemetry:</strong> Open <strong className="text-white">Settings &gt; System &gt; Docker Containers</strong> in the dashboard to check live memory/CPU stats or restart container threads.
+                </li>
+              </ul>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setConnectionDiagnostic(null)}
+              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white rounded text-xs transition cursor-pointer"
+            >
+              Dismiss Warning
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setIsRefreshing(true);
+                await Promise.all([fetchMounts(), fetchJobs(), fetchFiles(), fetchNotificationConfig()]);
+                setIsRefreshing(false);
+              }}
+              className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition flex items-center gap-1.5 cursor-pointer text-xs"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span>Retry Backend Connection</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header Banner */}
       <div className="bg-[#111111] border border-white/10 rounded-xl p-5 md:p-6 shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">

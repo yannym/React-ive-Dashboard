@@ -378,6 +378,18 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => {
+                    onWorkspaceChange();
+                    addSystemLog("info", "copilot", "User triggered manual workspace rescan from Gemini Copilot.");
+                  }}
+                  className="px-2 py-0.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-[9px] font-mono transition flex items-center gap-1 cursor-pointer font-bold"
+                  title="Rescan src/components for newly created or modified custom TSX applets"
+                >
+                  <RefreshCw className="w-3 h-3 text-emerald-400" />
+                  <span>Rescan Apps</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setShowKeyInput(!showKeyInput)}
                   className={`p-1 hover:bg-white/5 rounded transition cursor-pointer flex items-center gap-1 ${customKey ? "text-emerald-400" : "text-white/40"}`}
                   title="Configure custom Gemini API Key fallback"
