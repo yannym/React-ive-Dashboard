@@ -111,7 +111,24 @@ export function getBackendUrl(apiPath: string): string {
 }
 
 export async function detectFallbackMode(): Promise<boolean> {
-  // 1. If explicit custom URL is saved in localStorage, probe it first
+  // 1. Probe relative path first (standard same-origin unified container behavior)
+  try {
+    const relativeResp = await fetch("/api/list-components", { signal: AbortSignal.timeout(1500) });
+    if (relativeResp.ok) {
+      // Relative path works natively! Clear any stale custom backend URL overrides that might cause ERR_CONNECTION_REFUSED
+      const customUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
+      if (customUrl && customUrl.includes(":3200")) {
+        localStorage.removeItem("applet_dashboard_custom_backend_url");
+      }
+      autoDetectedBackendUrl = null;
+      stickyFallbackMode = false;
+      return false;
+    }
+  } catch (e) {
+    // Relative fetch failed, try custom or legacy fallback probes
+  }
+
+  // 2. If explicit custom URL is saved in localStorage, probe it
   const activeCustomUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
   if (activeCustomUrl && activeCustomUrl.trim().startsWith("http")) {
     try {
@@ -122,23 +139,12 @@ export async function detectFallbackMode(): Promise<boolean> {
         return false;
       }
     } catch (e) {
-      console.warn("Configured custom backend URL failed health check:", e);
+      console.warn("Configured custom backend URL failed health check, clearing stale override:", e);
+      localStorage.removeItem("applet_dashboard_custom_backend_url");
     }
   }
 
-  // 2. Probe relative path (same origin / host / port, e.g. http://the-vault.local:3200/api/list-components)
-  try {
-    const relativeResp = await fetch("/api/list-components", { signal: AbortSignal.timeout(1500) });
-    if (relativeResp.ok) {
-      autoDetectedBackendUrl = null;
-      stickyFallbackMode = false;
-      return false;
-    }
-  } catch (e) {
-    // Relative fetch failed
-  }
-
-  // 3. Probe host port 3200 fallback (e.g. http://the-vault.local:3200 or http://localhost:3200)
+  // 3. Probe host port 3200 fallback if running on a custom port/host
   if (typeof window !== "undefined" && window.location && window.location.hostname) {
     const protocol = window.location.protocol && window.location.protocol.startsWith("http") ? window.location.protocol : "http:";
     const hostname = window.location.hostname;

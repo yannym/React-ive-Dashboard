@@ -19,7 +19,7 @@ services:
       - ./downloads:/app/downloads
       - ./data:/app/data
       # OMV NAS Share Volume Mount (Optional - map host media directory to /media/nas_share)
-      - /srv/mergerfs/YMP/YMP:/media/nas_share
+      # - /srv/mergerfs/YMP/YMP:/media/nas_share
       # Docker Socket access (Optional - allows container to monitor local Docker status)
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
