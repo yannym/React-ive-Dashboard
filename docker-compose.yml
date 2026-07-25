@@ -1,6 +1,7 @@
 services:
   app:
-    build: .
+    build:
+    context: https://github.com/yannym/React-ive-Dashboard.git#main # The branch
     container_name: applet-cockpit
     pull_policy: build
     ports:
