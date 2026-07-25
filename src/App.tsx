@@ -39,7 +39,10 @@ import {
   Info,
   RotateCcw,
   AlertCircle,
-  DownloadCloud
+  DownloadCloud,
+  Container,
+  Cpu,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Applet, AppletSetting, OpenMode, SandboxConfig, FirebaseConnectionDetails } from './types';
@@ -181,6 +184,92 @@ export default function App() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'storage' | 'nas' | 'terminal' | 'system'>('storage');
+
+  // --- DOCKER HEALTH & CONTAINER MONITORING STATES ---
+  interface DockerContainerState {
+    id: string;
+    name: string;
+    image: string;
+    status: string;
+    state: 'running' | 'restarting' | 'stopped' | 'exited';
+    memoryUsageMB: number;
+    memoryLimitMB: number;
+    memoryFormatted: string;
+    memoryPerc: number;
+    cpuPerc: number;
+    ports: string;
+    uptime: string;
+    restartedAt?: string;
+  }
+
+  const [dockerContainers, setDockerContainers] = useState<DockerContainerState[]>([]);
+  const [dockerLoading, setDockerLoading] = useState(false);
+  const [dockerError, setDockerError] = useState<string | null>(null);
+  const [dockerRestartingId, setDockerRestartingId] = useState<string | null>(null);
+  const [dockerEngineStatus, setDockerEngineStatus] = useState<string>('online');
+  const [dockerTotalMemMB, setDockerTotalMemMB] = useState<number>(0);
+  const [dockerVersion, setDockerVersion] = useState<string>('Docker Engine v24.0.6');
+  const [systemSubTab, setSystemSubTab] = useState<'docker' | 'overview'>('docker');
+
+  const fetchDockerContainers = async () => {
+    setDockerLoading(true);
+    setDockerError(null);
+    try {
+      const res = await fetch(getBackendUrl('/api/docker/containers'));
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+      const data = await res.json();
+      if (data.success && Array.isArray(data.containers)) {
+        setDockerContainers(data.containers);
+        setDockerEngineStatus(data.engineStatus || 'online');
+        setDockerTotalMemMB(data.totalMemoryMB || 0);
+        if (data.dockerVersion) setDockerVersion(data.dockerVersion);
+      } else {
+        throw new Error(data.error || 'Failed to fetch container telemetry');
+      }
+    } catch (err: any) {
+      console.warn('Docker telemetry fetch error:', err);
+      setDockerError(err.message || 'Failed to connect to Docker backend API');
+    } finally {
+      setDockerLoading(false);
+    }
+  };
+
+  const handleRestartContainer = async (containerId: string, containerName: string) => {
+    setDockerRestartingId(containerId);
+    try {
+      addSystemLog('info', 'system', `Initiated container restart for "${containerName}" (${containerId}) via backend API...`);
+      const res = await fetch(getBackendUrl(`/api/docker/containers/${encodeURIComponent(containerId)}/restart`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: containerId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        triggerToast(`Successfully restarted container "${containerName}"!`, 'success');
+        addSystemLog('success', 'system', `Container "${containerName}" restarted successfully.`);
+        await fetchDockerContainers();
+      } else {
+        throw new Error(data.error || 'Restart command failed');
+      }
+    } catch (err: any) {
+      triggerToast(`Failed to restart container "${containerName}": ${err.message}`, 'error');
+      addSystemLog('error', 'system', `Container restart failed: ${err.message}`);
+    } finally {
+      setDockerRestartingId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (showSettingsModal && settingsTab === 'system' && systemSubTab === 'docker') {
+      fetchDockerContainers();
+      const interval = setInterval(() => {
+        fetchDockerContainers();
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [showSettingsModal, settingsTab, systemSubTab]);
   const [copiedYaml, setCopiedYaml] = useState(false);
   const [terminalLogs, setTerminalLogs] = useState<{ command: string; output: string; isError: boolean; timestamp: string }[]>([
     { command: '# system-init', output: 'Architect NAS Command terminal connected. Type commands below.', isError: false, timestamp: new Date().toLocaleTimeString() }
@@ -3798,7 +3887,7 @@ export default function App() {
                     : 'border-transparent text-white/40 hover:text-white/80'
                 }`}
               >
-                Diagnostics
+                System & Docker
               </button>
             </div>
 
@@ -4076,127 +4165,344 @@ services:
 
             {settingsTab === 'system' && (
               <div className="p-6 space-y-4 text-xs font-mono overflow-y-auto">
-                <div className="bg-black/50 p-4 border border-white/5 space-y-3">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Dashboard Version</span>
-                    <span className="text-emerald-400 font-bold text-xs bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/20">v0.1.0</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Application Name</span>
-                    <span className="text-white/80">Cockpit Applet Dashboard</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Dev Host</span>
-                    <span className="text-white/80">0.0.0.0:3000 (Express)</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Sandbox Platform</span>
-                    <span className="text-white/80">Vite + React (HMR Disabled)</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Storage Size</span>
-                    <span className="text-white/80">{(JSON.stringify(localStorage).length / 1024).toFixed(2)} KB</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-white/40 uppercase tracking-widest text-[9px]">Registered Applets</span>
-                    <span className="text-white/80">{applets.length} Registered ({applets.filter(a => a.isCustom).length} Custom)</span>
-                  </div>
-                </div>
-
-                <div className="bg-black/20 p-4 border border-white/5 rounded-none space-y-2.5">
-                  <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Backend Connection Status</span>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${customBackendUrl ? 'bg-indigo-400' : 'bg-emerald-400'} animate-pulse`} />
-                    <span className="text-white font-medium text-[11px]">
-                      {customBackendUrl ? 'Remote Express Node' : 'Direct Sandbox Node'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-white/40 leading-relaxed font-sans font-medium">
-                    {customBackendUrl 
-                      ? `Requests are proxied to your remote container: ${customBackendUrl}. Live TSX compilation and AI features execute remote file actions.`
-                      : 'Running inside the safe local sandbox container. The integrated Express server (port 3000) handles compilation, AI interactions, and file management.'}
-                  </p>
-                </div>
-
-                <div className="bg-black/40 p-4 border border-white/5 rounded-none space-y-4">
-                  <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Fluid Screensaver Settings</span>
-                  
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
-                    <span className="text-white/60">Enable Screensaver</span>
-                    <label className="relative inline-flex items-center cursor-pointer select-none">
-                      <input 
-                        type="checkbox" 
-                        checked={isScreensaverEnabled}
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setIsScreensaverEnabled(val);
-                          localStorage.setItem('screensaver_enabled', val ? 'true' : 'false');
-                          addSystemLog('info', 'system', `Screensaver ${val ? 'enabled' : 'disabled'}.`);
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className="w-8 h-4 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-[14px] after:transition-all peer-checked:bg-emerald-500"></div>
-                    </label>
-                  </div>
-
-                  {isScreensaverEnabled && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between text-white/60">
-                        <span>Idle Timeout</span>
-                        <div className="flex items-center gap-1.5">
-                          <input 
-                            type="number"
-                            min="3"
-                            max="3600"
-                            value={screensaverTimeout}
-                            onChange={(e) => {
-                              const val = Math.max(3, parseInt(e.target.value, 10) || 5);
-                              setScreensaverTimeout(val);
-                              localStorage.setItem('screensaver_timeout', val.toString());
-                            }}
-                            className="w-16 px-2 py-0.5 bg-[#0A0A0A] border border-white/10 text-emerald-400 font-bold font-mono text-center text-xs focus:outline-none focus:border-emerald-500/50"
-                          />
-                          <span className="text-[10px] text-white/40 font-mono uppercase">Seconds</span>
-                        </div>
-                      </div>
-                      <input 
-                        type="range" 
-                        min="5" 
-                        max="300" 
-                        step="5"
-                        value={screensaverTimeout}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10);
-                          setScreensaverTimeout(val);
-                          localStorage.setItem('screensaver_timeout', val.toString());
-                        }}
-                        className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                      />
-                      <div className="flex justify-between text-[8px] text-white/30 font-mono">
-                        <span>5s</span>
-                        <span>1m</span>
-                        <span>3m</span>
-                        <span>5m</span>
-                      </div>
-                    </div>
-                  )}
-
+                {/* System Sub-Tab Switcher */}
+                <div className="flex items-center gap-2 border-b border-white/5 pb-3">
                   <button
                     type="button"
                     onClick={() => {
-                      setIsScreensaverActive(true);
-                      setShowSettingsModal(false);
-                      addSystemLog('info', 'system', 'Triggering screensaver preview.');
+                      setSystemSubTab('docker');
+                      fetchDockerContainers();
                     }}
-                    className="w-full py-2 bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold tracking-wider uppercase transition cursor-pointer"
+                    className={`px-3.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition cursor-pointer flex items-center gap-2 ${
+                      systemSubTab === 'docker'
+                        ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-sm'
+                        : 'bg-black/30 text-white/40 border border-white/5 hover:text-white/70'
+                    }`}
                   >
-                    Preview Screensaver Now
+                    <Container className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Docker Health</span>
+                    {dockerContainers.length > 0 && (
+                      <span className="bg-indigo-500/20 text-indigo-300 px-1.5 py-0.2 rounded text-[8px]">
+                        {dockerContainers.filter(c => c.state === 'running').length} Active
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSystemSubTab('overview')}
+                    className={`px-3.5 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider transition cursor-pointer flex items-center gap-2 ${
+                      systemSubTab === 'overview'
+                        ? 'bg-white/10 text-white border border-white/20'
+                        : 'bg-black/30 text-white/40 border border-white/5 hover:text-white/70'
+                    }`}
+                  >
+                    <Server className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>System Overview</span>
                   </button>
                 </div>
 
-                <div className="bg-[#1A1A1A] p-4 border border-white/10 text-center rounded-none font-bold text-white text-[10px] tracking-widest uppercase">
-                  ALL SYSTEMS OPERATIONAL
-                </div>
+                {systemSubTab === 'docker' && (
+                  <div className="space-y-4">
+                    {/* Docker Engine Health Status Banner */}
+                    <div className="bg-black/50 p-4 border border-white/10 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <span className="text-white font-bold text-xs uppercase tracking-wider">Docker Engine Status</span>
+                          <span className="text-emerald-400 text-[9px] bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/20 font-bold uppercase tracking-widest">
+                            ● {dockerEngineStatus.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-white/40 text-[9px] hidden sm:inline">{dockerVersion}</span>
+                          <button
+                            type="button"
+                            onClick={() => fetchDockerContainers()}
+                            disabled={dockerLoading}
+                            className="px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 hover:text-white text-[9px] font-bold uppercase tracking-widest flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3 h-3 text-indigo-400 ${dockerLoading ? 'animate-spin' : ''}`} />
+                            <span>{dockerLoading ? 'Refreshing...' : 'Refresh Telemetry'}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Metrics Bar */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-[10px]">
+                        <div className="bg-[#050505] p-2.5 border border-white/5 space-y-1">
+                          <span className="text-white/40 block text-[8px] uppercase tracking-widest">Active Containers</span>
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-emerald-400 font-bold text-base">
+                              {dockerContainers.filter(c => c.state === 'running').length}
+                            </span>
+                            <span className="text-white/30 text-[9px]">/ {dockerContainers.length} Total</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-[#050505] p-2.5 border border-white/5 space-y-1">
+                          <span className="text-white/40 block text-[8px] uppercase tracking-widest">Total Container RAM Usage</span>
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-indigo-400 font-bold text-base">
+                              {dockerTotalMemMB || dockerContainers.reduce((a, b) => a + (b.state === 'running' ? b.memoryUsageMB : 0), 0).toFixed(0)} MB
+                            </span>
+                            <span className="text-white/30 text-[9px]">Active Allocated</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-[#050505] p-2.5 border border-white/5 space-y-1">
+                          <span className="text-white/40 block text-[8px] uppercase tracking-widest">Backend API Control</span>
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-emerald-400 font-semibold text-xs">RESTART API READY</span>
+                            <span className="text-white/30 text-[8px]">PORT 3000</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {dockerError && (
+                      <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>{dockerError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchDockerContainers()}
+                          className="px-2 py-0.5 bg-red-500/20 border border-red-500/30 text-red-300 font-bold uppercase text-[9px]"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Container Cards List */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-[9px] uppercase tracking-widest text-white/40">
+                        <span>Active Docker Containers ({dockerContainers.length})</span>
+                        <span>Backend API: POST /api/docker/containers/:id/restart</span>
+                      </div>
+
+                      {dockerContainers.map((container) => {
+                        const isRestarting = dockerRestartingId === container.id;
+                        const memPerc = container.memoryPerc || 0;
+                        const barColor = memPerc > 80 ? 'bg-rose-500' : memPerc > 50 ? 'bg-amber-500' : 'bg-emerald-500';
+
+                        return (
+                          <div
+                            key={container.id}
+                            className="bg-[#080808] border border-white/10 hover:border-white/20 p-4 space-y-3 transition"
+                          >
+                            {/* Card Header */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2.5">
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <Container className="w-4 h-4 text-indigo-400 shrink-0" />
+                                  <span className="text-white font-bold text-xs tracking-wide">{container.name}</span>
+                                  <span className="text-[9px] font-mono text-white/40 bg-white/5 px-1.5 py-0.5 border border-white/5">
+                                    ID: {container.id.substring(0, 12)}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-white/40 font-mono">
+                                  Image: <span className="text-white/70">{container.image}</span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                {/* Status Pill */}
+                                <div className={`flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider border ${
+                                  container.state === 'running' 
+                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                }`}>
+                                  <div className={`w-1.5 h-1.5 rounded-full ${container.state === 'running' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                                  <span>{container.status}</span>
+                                </div>
+
+                                {/* Restart Button */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRestartContainer(container.id, container.name)}
+                                  disabled={isRestarting}
+                                  className={`px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 border cursor-pointer ${
+                                    isRestarting
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                      : 'bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border-indigo-500/30 hover:border-indigo-400'
+                                  }`}
+                                >
+                                  <RotateCcw className={`w-3 h-3 ${isRestarting ? 'animate-spin text-amber-400' : 'text-indigo-400'}`} />
+                                  <span>{isRestarting ? 'Restarting...' : 'Restart Container'}</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Memory & Telemetry Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                              {/* Memory Bar */}
+                              <div className="space-y-1.5 bg-black/40 p-2.5 border border-white/5">
+                                <div className="flex justify-between items-center text-[9px]">
+                                  <span className="text-white/40 uppercase tracking-widest font-bold">Memory Usage</span>
+                                  <span className="text-emerald-400 font-bold">{container.memoryFormatted || `${container.memoryUsageMB} MiB`} ({container.memoryPerc}%)</span>
+                                </div>
+                                <div className="w-full bg-white/5 h-2 overflow-hidden border border-white/10">
+                                  <div
+                                    className={`h-full transition-all duration-500 ${barColor}`}
+                                    style={{ width: `${Math.min(100, Math.max(2, container.memoryPerc))}%` }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Ports and CPU */}
+                              <div className="grid grid-cols-2 gap-2 bg-black/40 p-2.5 border border-white/5 text-[9px]">
+                                <div>
+                                  <span className="text-white/40 block uppercase tracking-widest text-[8px]">Ports Binding</span>
+                                  <span className="text-white/80 font-mono text-[10px] font-semibold">{container.ports || 'Internal'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-white/40 block uppercase tracking-widest text-[8px]">CPU Load</span>
+                                  <span className="text-indigo-300 font-mono text-[10px] font-semibold">{container.cpuPerc}% CPU</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {container.restartedAt && (
+                              <div className="text-[9px] text-emerald-400/80 font-mono flex items-center gap-1 pt-1">
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span>Last restarted via API at {container.restartedAt}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {systemSubTab === 'overview' && (
+                  <div className="space-y-4">
+                    <div className="bg-black/50 p-4 border border-white/5 space-y-3">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Dashboard Version</span>
+                        <span className="text-emerald-400 font-bold text-xs bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/20">v0.1.0</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Application Name</span>
+                        <span className="text-white/80">Cockpit Applet Dashboard</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Dev Host</span>
+                        <span className="text-white/80">0.0.0.0:3000 (Express)</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Sandbox Platform</span>
+                        <span className="text-white/80">Vite + React (HMR Disabled)</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Local Storage Size</span>
+                        <span className="text-white/80">{(JSON.stringify(localStorage).length / 1024).toFixed(2)} KB</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[9px]">Registered Applets</span>
+                        <span className="text-white/80">{applets.length} Registered ({applets.filter(a => a.isCustom).length} Custom)</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/20 p-4 border border-white/5 rounded-none space-y-2.5">
+                      <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Backend Connection Status</span>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${customBackendUrl ? 'bg-indigo-400' : 'bg-emerald-400'} animate-pulse`} />
+                        <span className="text-white font-medium text-[11px]">
+                          {customBackendUrl ? 'Remote Express Node' : 'Direct Sandbox Node'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-white/40 leading-relaxed font-sans font-medium">
+                        {customBackendUrl 
+                          ? `Requests are proxied to your remote container: ${customBackendUrl}. Live TSX compilation and AI features execute remote file actions.`
+                          : 'Running inside the safe local sandbox container. The integrated Express server (port 3000) handles compilation, AI interactions, and file management.'}
+                      </p>
+                    </div>
+
+                    <div className="bg-black/40 p-4 border border-white/5 rounded-none space-y-4">
+                      <span className="text-[9px] font-bold block uppercase text-white/50 tracking-widest font-mono">Fluid Screensaver Settings</span>
+                      
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+                        <span className="text-white/60">Enable Screensaver</span>
+                        <label className="relative inline-flex items-center cursor-pointer select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={isScreensaverEnabled}
+                            onChange={(e) => {
+                              const val = e.target.checked;
+                              setIsScreensaverEnabled(val);
+                              localStorage.setItem('screensaver_enabled', val ? 'true' : 'false');
+                              addSystemLog('info', 'system', `Screensaver ${val ? 'enabled' : 'disabled'}.`);
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-8 h-4 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-[14px] after:transition-all peer-checked:bg-emerald-500"></div>
+                        </label>
+                      </div>
+
+                      {isScreensaverEnabled && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between text-white/60">
+                            <span>Idle Timeout</span>
+                            <div className="flex items-center gap-1.5">
+                              <input 
+                                type="number"
+                                min="3"
+                                max="3600"
+                                value={screensaverTimeout}
+                                onChange={(e) => {
+                                  const val = Math.max(3, parseInt(e.target.value, 10) || 5);
+                                  setScreensaverTimeout(val);
+                                  localStorage.setItem('screensaver_timeout', val.toString());
+                                }}
+                                className="w-16 px-2 py-0.5 bg-[#0A0A0A] border border-white/10 text-emerald-400 font-bold font-mono text-center text-xs focus:outline-none focus:border-emerald-500/50"
+                              />
+                              <span className="text-[10px] text-white/40 font-mono uppercase">Seconds</span>
+                            </div>
+                          </div>
+                          <input 
+                            type="range" 
+                            min="5" 
+                            max="300" 
+                            step="5"
+                            value={screensaverTimeout}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              setScreensaverTimeout(val);
+                              localStorage.setItem('screensaver_timeout', val.toString());
+                            }}
+                            className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                          />
+                          <div className="flex justify-between text-[8px] text-white/30 font-mono">
+                            <span>5s</span>
+                            <span>1m</span>
+                            <span>3m</span>
+                            <span>5m</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsScreensaverActive(true);
+                          setShowSettingsModal(false);
+                          addSystemLog('info', 'system', 'Triggering screensaver preview.');
+                        }}
+                        className="w-full py-2 bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold tracking-wider uppercase transition cursor-pointer"
+                      >
+                        Preview Screensaver Now
+                      </button>
+                    </div>
+
+                    <div className="bg-[#1A1A1A] p-4 border border-white/10 text-center rounded-none font-bold text-white text-[10px] tracking-widest uppercase">
+                      ALL SYSTEMS OPERATIONAL
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
