@@ -1,61 +1,36 @@
 services:
-  # Express Backend Container (Port 3200)
-  backend:
-    build: .
-    container_name: applet-backend
-    pull_policy: build
-    ports:
-      - "3200:3200"
-    environment:
-      - PORT=3200
-      - NODE_ENV=production
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - NOTIFICATION_EMAIL=${NOTIFICATION_EMAIL:-}
-      - DOCKER_VOLUMES=/mnt/omv_media:/media/ssd:./downloads/wetransfer
-    volumes:
-      # Local downloads folder
-      - ./downloads:/app/downloads
-      # OpenMediaVault (OMV) NAS Share Mount (Uncomment & adapt your local OMV path)
-      # - /srv/dev-disk-by-uuid-omv/share:/mnt/omv_media
-      # External USB/NVMe SSD Mount Point (Uncomment & adapt your local SSD path)
-      # - /media/external_ssd:/media/ssd
-    restart: unless-stopped
-    command: node dist/server.cjs
-
-  # Frontend Cockpit Application Container (Port 3000)
-  app:
-    build: .
-    container_name: applet-cockpit
-    pull_policy: build
+  # Unified Cockpit Dashboard + Express Backend (Port 3000)
+  architect-dashboard:
+    build:
+      context: https://github.com/yannym/React-ive-Dashboard.git#main
+      dockerfile: Dockerfile
+    container_name: architect-dashboard
     ports:
       - "3000:3000"
     environment:
       - PORT=3000
       - NODE_ENV=production
-      - BACKEND_URL=http://backend:3200
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NOTIFICATION_EMAIL=${NOTIFICATION_EMAIL:-}
+      - DOCKER_VOLUMES=/srv/mergerfs/YMP/YMP
     volumes:
+      # Persistent local storage for downloads & app data (Do NOT mount host root to /app!)
       - ./downloads:/app/downloads
+      - ./data:/app/data
+      # OMV NAS Share Volume Mount (Optional - map host media directory to /media/nas_share)
+      # - /srv/mergerfs/YMP/YMP:/media/nas_share
+      # Docker Socket access (Optional - allows container to monitor local Docker status)
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
-    depends_on:
-      - backend
-    # Docker Compose Watch configuration to trigger automatic rebuilds on source changes
-    develop:
-      watch:
-        - action: rebuild
-          path: .
-          ignore:
-            - node_modules/
-            - dist/
-            - .git/
 
-  # Watchtower container service to monitor and automatically update running images
+  # Optional Watchtower service to automatically update running container images
   watchtower:
     image: containrrr/watchtower
-    container_name: applet-watchtower
+    container_name: architect-watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --interval 300 --cleanup
     profiles:
       - auto-update
+
