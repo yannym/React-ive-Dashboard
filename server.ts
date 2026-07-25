@@ -790,14 +790,30 @@ async function startServer() {
       let lastResponse: any = null;
 
       while (loopCount < 8) {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents,
-          config: {
-            systemInstruction,
-            tools: tools.length > 0 ? tools : undefined,
+        let response: any = null;
+        const candidateModels = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"];
+        let lastModelErr: any = null;
+
+        for (const modelName of candidateModels) {
+          try {
+            response = await ai.models.generateContent({
+              model: modelName,
+              contents,
+              config: {
+                systemInstruction,
+                tools: tools.length > 0 ? tools : undefined,
+              }
+            });
+            if (response) break;
+          } catch (mErr: any) {
+            console.warn(`Model ${modelName} call failed, trying next:`, mErr?.message || mErr);
+            lastModelErr = mErr;
           }
-        });
+        }
+
+        if (!response) {
+          throw lastModelErr || new Error("Failed to generate content with available Gemini models.");
+        }
 
         lastResponse = response;
         const functionCalls = response.functionCalls;
