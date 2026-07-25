@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Sparkles, X, Send, Copy, Check, Server, Terminal, AlertTriangle, Key } from "lucide-react";
-import { getBackendUrl } from "../lib/filesystem";
+import { Sparkles, X, Send, Copy, Check, Server, Terminal, AlertTriangle, Key, RefreshCw } from "lucide-react";
+import { getBackendUrl, detectFallbackMode, setCustomBackendUrl, resetBackendHealthCache } from "../lib/filesystem";
 
 interface GeminiCopilotProps {
   onWorkspaceChange: () => void;
@@ -44,14 +44,19 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
   }, [history]);
 
   // Check if Express backend is online on load
+  const checkServerHealth = async () => {
+    try {
+      await detectFallbackMode();
+      const target = getBackendUrl("/api/list-components");
+      const res = await fetch(target, { signal: AbortSignal.timeout(3000) });
+      setIsServerOnline(res.ok);
+    } catch {
+      setIsServerOnline(false);
+    }
+  };
+
   useEffect(() => {
-    fetch(getBackendUrl("/api/list-components"))
-      .then((res) => {
-        setIsServerOnline(res.ok);
-      })
-      .catch(() => {
-        setIsServerOnline(false);
-      });
+    checkServerHealth();
   }, []);
 
   // Auto-scroll to bottom of chat
@@ -437,14 +442,38 @@ export function GeminiCopilot({ onWorkspaceChange, addSystemLog, appletsCount }:
                   I am a server-side compiler assistant. I can inspect files, write React code, and configure dashboards.
                 </p>
                 {isServerOnline === false && (
-                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[10px] space-y-1">
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-[10px] space-y-2">
                     <p className="font-bold flex items-center gap-1">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      Static Deployment Detected
+                      Backend Server Offline or Disconnected
                     </p>
                     <p className="leading-normal text-white/70">
-                      You are running in a static host (like GitHub Pages). Workspace write operations, the local filesystem, and server compilation are disabled because there is no running Express container. Use our development workspace to run full-stack operations!
+                      If your Express backend is running in its own container mapped to <span className="font-mono text-emerald-400 font-bold">Port 3200</span>, click below to connect or test connection:
                     </p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const protocol = window.location.protocol.startsWith("http") ? window.location.protocol : "http:";
+                          const host = window.location.hostname || "localhost";
+                          const target3200 = `${protocol}//${host}:3200`;
+                          setCustomBackendUrl(target3200);
+                          addSystemLog("info", "copilot", `Set backend target URL to ${target3200}`);
+                          await checkServerHealth();
+                        }}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-bold text-[9px] rounded transition cursor-pointer flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-2.5 h-2.5" />
+                        <span>Connect to Port 3200 ({window.location.hostname}:3200)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => checkServerHealth()}
+                        className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white font-mono text-[9px] rounded transition cursor-pointer"
+                      >
+                        Retry Check
+                      </button>
+                    </div>
                   </div>
                 )}
                 <div className="pt-2 space-y-1.5">

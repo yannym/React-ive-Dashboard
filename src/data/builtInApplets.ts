@@ -100,6 +100,22 @@ export const BUILT_IN_APPLETS: Applet[] = [
     updatedAt: new Date().toISOString()
   },
   {
+    id: 'builtin-wetransfer',
+    name: 'WeTransfer Downloader',
+    description: 'Background downloader for direct WeTransfer email links (we.tl/t-...) with real-time process tracking and auto-unzip.',
+    url: 'internal:wetransfer',
+    isCustomEmbed: false,
+    icon: '📦',
+    category: 'Utilities',
+    tags: ['wetransfer', 'downloader', 'background', 'files'],
+    openMode: 'iframe',
+    accentColor: 'emerald',
+    isPinned: true,
+    ownerId: 'default',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
     id: 'builtin-screensaver',
     name: 'Fluid Screensaver',
     description: 'Topographic flow-field dynamic screensaver with customizable idle timeout and mouse interactive dissolving.',

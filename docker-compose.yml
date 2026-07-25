@@ -1,7 +1,30 @@
 services:
+  # Express Backend Container (Port 3200)
+  backend:
+    build: .
+    container_name: applet-backend
+    pull_policy: build
+    ports:
+      - "3200:3200"
+    environment:
+      - PORT=3200
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NOTIFICATION_EMAIL=${NOTIFICATION_EMAIL:-}
+      - DOCKER_VOLUMES=/mnt/omv_media:/media/ssd:./downloads/wetransfer
+    volumes:
+      # Local downloads folder
+      - ./downloads:/app/downloads
+      # OpenMediaVault (OMV) NAS Share Mount (Uncomment & adapt your local OMV path)
+      # - /srv/dev-disk-by-uuid-omv/share:/mnt/omv_media
+      # External USB/NVMe SSD Mount Point (Uncomment & adapt your local SSD path)
+      # - /media/external_ssd:/media/ssd
+    restart: unless-stopped
+    command: node dist/server.cjs
+
+  # Frontend Cockpit Application Container (Port 3000)
   app:
-    build:
-    context: https://github.com/yannym/React-ive-Dashboard.git#main # The branch
+    build: .
     container_name: applet-cockpit
     pull_policy: build
     ports:
@@ -9,8 +32,13 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=production
+      - BACKEND_URL=http://backend:3200
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./downloads:/app/downloads
     restart: unless-stopped
+    depends_on:
+      - backend
     # Docker Compose Watch configuration to trigger automatic rebuilds on source changes
     develop:
       watch:

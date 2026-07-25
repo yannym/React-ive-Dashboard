@@ -38,7 +38,8 @@ import {
   LogOut,
   Info,
   RotateCcw,
-  AlertCircle
+  AlertCircle,
+  DownloadCloud
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Applet, AppletSetting, OpenMode, SandboxConfig, FirebaseConnectionDetails } from './types';
@@ -57,6 +58,7 @@ import { SystemConsoleModal } from './components/SystemConsoleModal';
 import { GeminiCopilot } from './components/GeminiCopilot';
 import { FluidScreensaver } from './components/FluidScreensaver';
 import { PerformanceMetricsCard } from './components/PerformanceMetricsCard';
+import { WeTransferDownloader } from './components/WeTransferDownloader';
 import { listFiles, readFile, writeFile, deleteFile, getBackendUrl } from './lib/filesystem';
 import { 
   db, 
@@ -2488,10 +2490,10 @@ export default function App() {
                 </div>
 
                 {/* WORKBOARD LAYOUT MODE NAVIGATION TABS */}
-                <div className="flex border-b border-white/5 pb-px gap-6 my-2 font-mono text-xs select-none">
+                <div className="flex border-b border-white/5 pb-px gap-6 my-2 font-mono text-xs select-none overflow-x-auto scrollbar-none">
                   <button
                     onClick={() => setDashboardLayoutMode('grid')}
-                    className={`pb-2 px-1 relative font-bold uppercase text-[10px] tracking-widest transition-all focus:outline-none flex items-center gap-2 ${
+                    className={`pb-2 px-1 relative font-bold uppercase text-[10px] tracking-widest transition-all focus:outline-none flex items-center gap-2 whitespace-nowrap cursor-pointer ${
                       dashboardLayoutMode === 'grid' 
                         ? 'text-emerald-400 border-b-2 border-emerald-500 font-bold' 
                         : 'text-white/40 hover:text-white'
@@ -2501,8 +2503,19 @@ export default function App() {
                     Applet Catalog Grid
                   </button>
                   <button
+                    onClick={() => setDashboardLayoutMode('wetransfer')}
+                    className={`pb-2 px-1 relative font-bold uppercase text-[10px] tracking-widest transition-all focus:outline-none flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                      dashboardLayoutMode === 'wetransfer' 
+                        ? 'text-emerald-400 border-b-2 border-emerald-500 font-bold' 
+                        : 'text-white/40 hover:text-white'
+                    }`}
+                  >
+                    <DownloadCloud className="w-3.5 h-3.5 text-emerald-400" />
+                    WeTransfer Downloader
+                  </button>
+                  <button
                     onClick={() => setDashboardLayoutMode('tiled')}
-                    className={`pb-2 px-1 relative font-bold uppercase text-[10px] tracking-widest transition-all focus:outline-none flex items-center gap-2 ${
+                    className={`pb-2 px-1 relative font-bold uppercase text-[10px] tracking-widest transition-all focus:outline-none flex items-center gap-2 whitespace-nowrap cursor-pointer ${
                       dashboardLayoutMode === 'tiled' 
                         ? 'text-emerald-400 border-b-2 border-emerald-500 font-bold' 
                         : 'text-white/40 hover:text-white'
@@ -2554,6 +2567,29 @@ export default function App() {
 
               {/* PERFORMANCE METRICS SUMMARY CARD */}
               <PerformanceMetricsCard />
+
+              {/* WETRANSFER QUICK ACCESS BANNER */}
+              <div className="bg-[#111111] border border-white/10 p-4 rounded-xl flex items-center justify-between gap-4 font-mono shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                    <DownloadCloud className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                      WeTransfer Background Downloader
+                      <span className="text-[9px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 rounded font-normal">Active</span>
+                    </h4>
+                    <p className="text-[11px] text-white/50">Direct email link parsing (`we.tl/...`) with real-time download tracking</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDashboardLayoutMode('wetransfer')}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  <span>Open Downloader</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
               {/* DYNAMIC ERROR WARNING BANNER */}
               {syncError && (
@@ -2827,6 +2863,10 @@ export default function App() {
                 </div>
               )}
             </div>
+          ) : dashboardLayoutMode === 'wetransfer' ? (
+            <div className="p-4 md:p-6 pt-0 overflow-y-auto flex-1 text-left">
+              <WeTransferDownloader />
+            </div>
           ) : (
             <div className="flex-1 min-h-0 flex flex-col p-4 md:p-6 pt-0">
               <TiledWorkspace
@@ -2991,6 +3031,11 @@ export default function App() {
                     )}
                     {activeApplet.url === 'internal:calculator' && (
                       <CalculatorApp key={iframeRefreshKey} />
+                    )}
+                    {activeApplet.url === 'internal:wetransfer' && (
+                      <div className="p-6 h-full overflow-y-auto">
+                        <WeTransferDownloader key={iframeRefreshKey} />
+                      </div>
                     )}
 
                     {activeApplet.url?.startsWith('internal:component:') && (
@@ -3767,16 +3812,31 @@ export default function App() {
                 </div>
 
                 <div className="space-y-1.5 border-t border-white/5 pt-4">
-                  <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Backend Service Container URL</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-white/40 block uppercase tracking-widest text-[9px] font-mono">Custom Backend Service Container URL</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const protocol = window.location.protocol.startsWith('http') ? window.location.protocol : 'http:';
+                        const host = window.location.hostname || 'localhost';
+                        const target3200 = `${protocol}//${host}:3200`;
+                        setCustomBackendUrl(target3200);
+                        triggerToast(`Set backend target to ${target3200}`, 'info');
+                      }}
+                      className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/20 cursor-pointer flex items-center gap-1"
+                    >
+                      <span>⚡ Set Port 3200 ({window.location.hostname}:3200)</span>
+                    </button>
+                  </div>
                   <input
                     type="text"
-                    placeholder="https://my-express-backend.render.com"
+                    placeholder="e.g. http://localhost:3200 or http://my-server:3200"
                     value={customBackendUrl}
                     onChange={(e) => setCustomBackendUrl(e.target.value)}
                     className="w-full px-3 py-2.5 bg-[#0A0A0A] border border-white/10 rounded-none text-white focus:outline-none focus:border-white/30 font-mono text-xs"
                   />
                   <span className="text-[10px] text-white/30 block leading-normal font-mono">
-                    Enter your self-hosted backend container URL (e.g. deployed to Cloud Run, Render, Railway, or running locally via ngrok). This lets your GitHub Pages build execute the Gemini Assistant, read/write files, and compile components live!
+                    Enter your self-hosted Express container URL (e.g. http://localhost:3200). When configured, the dashboard, system metrics, Gemini Copilot, and file compiling connect directly to your container!
                   </span>
                 </div>
 

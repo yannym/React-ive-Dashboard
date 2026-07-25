@@ -1,0 +1,29 @@
+[
+  {
+    "id": "default",
+    "name": "Workspace Downloads",
+    "path": "./downloads/wetransfer",
+    "type": "workspace",
+    "description": "Default local workspace downloads directory",
+    "isDefault": true,
+    "createdAt": 1720000000000
+  },
+  {
+    "id": "omv_nas",
+    "name": "OMV Server NAS Share",
+    "path": "/mnt/omv_media/wetransfer",
+    "type": "omv_nas",
+    "description": "OpenMediaVault network storage share (/mnt/omv_media)",
+    "isDefault": false,
+    "createdAt": 1720000001000
+  },
+  {
+    "id": "external_ssd",
+    "name": "Mounted External SSD",
+    "path": "/media/ssd/wetransfer",
+    "type": "external_drive",
+    "description": "Mounted USB/NVMe external storage (/media/ssd)",
+    "isDefault": false,
+    "createdAt": 1720000002000
+  }
+]

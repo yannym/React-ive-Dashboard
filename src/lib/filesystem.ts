@@ -67,33 +67,104 @@ export function isStaticHost(): boolean {
 
 /**
  * Helper to resolve the correct URL for backend API requests.
- * If the user has configured a custom backend URL in Settings (saved in localStorage),
- * we rewrite the API request to go to that remote server (e.g. https://my-backend-server.com/api/...)
+ * If the user has configured a custom backend URL in Settings (saved in localStorage)
+ * or if a backend running on port 3200 is auto-detected, we rewrite API requests.
  */
-export function getBackendUrl(apiPath: string): string {
+let autoDetectedBackendUrl: string | null = null;
+let stickyFallbackMode: boolean | null = null;
+
+export function getDetectedBackendUrl(): string {
   const customUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
   if (customUrl && customUrl.trim().startsWith("http")) {
-    const baseUrl = customUrl.trim().replace(/\/$/, ""); // strip trailing slash
+    return customUrl.trim();
+  }
+  return autoDetectedBackendUrl || "";
+}
+
+export function setCustomBackendUrl(url: string) {
+  if (url && url.trim()) {
+    localStorage.setItem("applet_dashboard_custom_backend_url", url.trim());
+  } else {
+    localStorage.removeItem("applet_dashboard_custom_backend_url");
+  }
+  autoDetectedBackendUrl = null;
+  stickyFallbackMode = null;
+}
+
+export function resetBackendHealthCache() {
+  autoDetectedBackendUrl = null;
+  stickyFallbackMode = null;
+}
+
+export function getBackendUrl(apiPath: string): string {
+  const customUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
+  const activeBaseUrl = (customUrl && customUrl.trim().startsWith("http"))
+    ? customUrl.trim()
+    : autoDetectedBackendUrl;
+
+  if (activeBaseUrl) {
+    const baseUrl = activeBaseUrl.replace(/\/$/, ""); // strip trailing slash
     const relativePath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
     return `${baseUrl}${relativePath}`;
   }
   return apiPath;
 }
 
-// Keep track of sticky server health state
-let stickyFallbackMode: boolean | null = null;
-
 export async function detectFallbackMode(): Promise<boolean> {
-  if (isStaticHost() && !localStorage.getItem("applet_dashboard_custom_backend_url")) return true;
-  if (stickyFallbackMode !== null) return stickyFallbackMode;
+  const customUrl = localStorage.getItem("applet_dashboard_custom_backend_url");
 
-  try {
-    const testResp = await fetch(getBackendUrl("/api/list-components"), { signal: AbortSignal.timeout(1500) });
-    stickyFallbackMode = !testResp.ok;
-  } catch (e) {
-    stickyFallbackMode = true;
+  // 1. If explicit custom URL is saved, probe it
+  if (customUrl && customUrl.trim().startsWith("http")) {
+    try {
+      const targetUrl = getBackendUrl("/api/list-components");
+      const resp = await fetch(targetUrl, { signal: AbortSignal.timeout(2500) });
+      if (resp.ok) {
+        stickyFallbackMode = false;
+        return false;
+      }
+    } catch (e) {
+      console.warn("Configured custom backend URL failed health check:", e);
+    }
   }
-  return stickyFallbackMode;
+
+  // 2. Probe relative path (same origin/host/port)
+  try {
+    const relativeResp = await fetch("/api/list-components", { signal: AbortSignal.timeout(1500) });
+    if (relativeResp.ok) {
+      autoDetectedBackendUrl = null;
+      stickyFallbackMode = false;
+      return false;
+    }
+  } catch (e) {
+    // Relative fetch failed
+  }
+
+  // 3. Probe port 3200 on current hostname (e.g. http://localhost:3200 or http://127.0.0.1:3200)
+  if (typeof window !== "undefined" && window.location && window.location.hostname) {
+    const protocol = window.location.protocol && window.location.protocol.startsWith("http") ? window.location.protocol : "http:";
+    const hostname = window.location.hostname;
+    const candidate3200 = `${protocol}//${hostname}:3200`;
+
+    try {
+      const probeResp = await fetch(`${candidate3200}/api/list-components`, { signal: AbortSignal.timeout(2000) });
+      if (probeResp.ok) {
+        console.log(`[Filesystem] Discovered active backend running on port 3200: ${candidate3200}`);
+        autoDetectedBackendUrl = candidate3200;
+        stickyFallbackMode = false;
+        return false;
+      }
+    } catch (e) {
+      // Port 3200 probe failed
+    }
+  }
+
+  if (isStaticHost() && !customUrl) {
+    stickyFallbackMode = true;
+    return true;
+  }
+
+  stickyFallbackMode = true;
+  return true;
 }
 
 // --- CORE API IMPLEMENTATIONS ---
