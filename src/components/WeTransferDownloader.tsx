@@ -737,6 +737,7 @@ export function WeTransferDownloader() {
                 {mounts.map((mount) => {
                   const isSelected = selectedMountPath === mount.path;
                   const isWritable = mount.status?.writable;
+                  const isFallback = mount.status?.mode === "sandboxed_fallback";
 
                   return (
                     <button
@@ -762,20 +763,38 @@ export function WeTransferDownloader() {
                         </span>
 
                         <span
-                          className={`w-2 h-2 rounded-full ${
-                            isWritable ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-red-400"
+                          className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
+                            isFallback
+                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                              : isWritable
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : "bg-red-500/20 text-red-300 border border-red-500/30"
                           }`}
-                          title={isWritable ? "Mount is online & writable" : "Mount is offline or read-only"}
-                        />
+                          title={
+                            isFallback
+                              ? `Sandboxed Fallback: Writing to ${mount.status?.resolvedPath}`
+                              : isWritable
+                              ? "Direct Mount: Online & Writable"
+                              : "Inaccessible"
+                          }
+                        >
+                          {isFallback ? "SANDBOX" : isWritable ? "ONLINE" : "OFFLINE"}
+                        </span>
                       </div>
 
                       <div className="text-[10px] text-white/40 truncate mt-1">
                         {mount.path}
                       </div>
 
-                      {mount.status?.freeBytes ? (
+                      {isFallback && (
+                        <div className="text-[9px] text-amber-300/80 mt-1 truncate">
+                          Mirror: {mount.status?.resolvedPath}
+                        </div>
+                      )}
+
+                      {!isFallback && mount.status?.freeBytes ? (
                         <div className="text-[9px] text-emerald-400/80 mt-1">
-                          Free Space: {formatBytes(mount.status.freeBytes)}
+                          Free: {formatBytes(mount.status.freeBytes)}
                         </div>
                       ) : null}
                     </button>
@@ -796,6 +815,31 @@ export function WeTransferDownloader() {
                 </p>
               </div>
             )}
+
+            {/* Active Mount Sandbox Notice */}
+            {(() => {
+              const currentMountObj = mounts.find(m => m.path === activeTargetPath);
+              if (currentMountObj?.status?.mode === "sandboxed_fallback") {
+                return (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-[11px] font-mono text-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Server className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        Path <code className="text-white bg-black/40 px-1 rounded">{activeTargetPath}</code> is operating in Sandboxed Fallback Mode (<code className="text-amber-300 bg-black/40 px-1 rounded">{currentMountObj.status.resolvedPath}</code>).
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowMountModal(true)}
+                      className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded font-bold transition text-[10px] whitespace-nowrap self-start sm:self-auto cursor-pointer"
+                    >
+                      View Docker Host Setup
+                    </button>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -908,16 +908,50 @@ async function startServer() {
   });
 
   // --- STORAGE MOUNTS MANAGEMENT & DOCKER AUTO-DISCOVERY API ---
+  const getSanitizedFallbackPath = (targetPath: string) => {
+    if (!targetPath) return path.resolve(process.cwd(), "./downloads/wetransfer");
+    const cleanName = targetPath
+      .replace(/^[\/\\]+/, "")
+      .replace(/[\/\\:\s]+/g, "_")
+      .toLowerCase();
+    return path.resolve(process.cwd(), `./downloads/mounts/${cleanName || "custom_mount"}`);
+  };
+
   const getSafeStoragePath = (targetPath: string) => {
     if (!targetPath) return path.resolve(process.cwd(), "./downloads/wetransfer");
     const trimmed = targetPath.trim();
     if (trimmed === "/" || trimmed === "/etc" || trimmed === "/var" || trimmed === "/usr" || trimmed === "/bin") {
       throw new Error("Cannot write directly into critical operating system root directories.");
     }
-    if (path.isAbsolute(trimmed)) {
-      return path.normalize(trimmed);
+
+    let resolvedPath = trimmed;
+    if (!path.isAbsolute(trimmed)) {
+      resolvedPath = path.resolve(process.cwd(), trimmed);
+    } else {
+      resolvedPath = path.normalize(trimmed);
     }
-    return path.resolve(process.cwd(), trimmed);
+
+    // Attempt direct path creation and write access test
+    try {
+      if (!fs.existsSync(resolvedPath)) {
+        fs.mkdirSync(resolvedPath, { recursive: true });
+      }
+      const testFile = path.join(resolvedPath, `.wt_perm_check_${Date.now()}.tmp`);
+      fs.writeFileSync(testFile, "test_write_ok", "utf8");
+      fs.unlinkSync(testFile);
+      return resolvedPath;
+    } catch (err: any) {
+      // Permission boundary hit on container root filesystem (e.g. /mnt or /media unmounted)
+      // Redirect seamlessly to workspace sandboxed fallback directory
+      const fallback = getSanitizedFallbackPath(trimmed);
+      try {
+        if (!fs.existsSync(fallback)) {
+          fs.mkdirSync(fallback, { recursive: true });
+        }
+      } catch (e) {}
+      console.warn(`[Storage Mount] Direct path '${resolvedPath}' restricted (${err.message}). Using sandboxed mount at '${fallback}'.`);
+      return fallback;
+    }
   };
 
   interface StorageMount {
@@ -982,17 +1016,32 @@ async function startServer() {
   };
 
   const testStoragePathAccess = (targetPath: string) => {
+    const trimmed = (targetPath || "").trim();
+    let resolvedPath = trimmed;
+    if (!trimmed) resolvedPath = "./downloads/wetransfer";
+
+    if (!path.isAbsolute(resolvedPath)) {
+      resolvedPath = path.resolve(process.cwd(), resolvedPath);
+    } else {
+      resolvedPath = path.normalize(resolvedPath);
+    }
+
+    // 1. Direct Access Test
+    let directAccessible = false;
+    let directError = "";
     try {
-      const resolvedPath = getSafeStoragePath(targetPath);
       if (!fs.existsSync(resolvedPath)) {
         fs.mkdirSync(resolvedPath, { recursive: true });
       }
-
-      // Test write access
       const testFile = path.join(resolvedPath, `.wt_write_test_${Date.now()}.tmp`);
       fs.writeFileSync(testFile, "test_write_ok", "utf8");
       fs.unlinkSync(testFile);
+      directAccessible = true;
+    } catch (err: any) {
+      directError = err.message || "Permission denied in container rootfs";
+    }
 
+    if (directAccessible) {
       let freeBytes = 0;
       let totalBytes = 0;
       try {
@@ -1006,21 +1055,39 @@ async function startServer() {
       return {
         accessible: true,
         writable: true,
+        mode: "direct",
         resolvedPath,
         freeBytes,
         totalBytes,
-        message: "Mount target path exists and is writable."
-      };
-    } catch (err: any) {
-      return {
-        accessible: false,
-        writable: false,
-        resolvedPath: targetPath,
-        freeBytes: 0,
-        totalBytes: 0,
-        error: err.message || "Mount target directory is inaccessible or read-only."
+        message: "Direct host/container mount point is online and fully writable."
       };
     }
+
+    // 2. Sandboxed Workspace Fallback Test
+    const fallbackPath = getSanitizedFallbackPath(trimmed);
+    let fallbackWritable = false;
+    try {
+      if (!fs.existsSync(fallbackPath)) {
+        fs.mkdirSync(fallbackPath, { recursive: true });
+      }
+      const testFile = path.join(fallbackPath, `.wt_write_test_${Date.now()}.tmp`);
+      fs.writeFileSync(testFile, "test_write_ok", "utf8");
+      fs.unlinkSync(testFile);
+      fallbackWritable = true;
+    } catch (e) {}
+
+    return {
+      accessible: fallbackWritable,
+      writable: fallbackWritable,
+      mode: "sandboxed_fallback",
+      resolvedPath: fallbackPath,
+      requestedPath: targetPath,
+      directError,
+      freeBytes: 0,
+      totalBytes: 0,
+      message: `System folder '${targetPath}' restricted (${directError}). Active sandboxed fallback: '${fallbackPath}'.`,
+      dockerTip: `To bind real host storage directly to '${targetPath}', add '-v /your/omv/share:${targetPath}' in docker-compose.yml.`
+    };
   };
 
   // Docker Compose Volume Auto-Discovery Function
@@ -1413,7 +1480,7 @@ async function startServer() {
       // Test write permissions before spawning downloader
       const testResult = testStoragePathAccess(safeOutputDir);
       if (!testResult.writable) {
-        return res.status(400).json({ error: `Cannot write to target storage location (${safeOutputDir}): ${testResult.error || "Permission denied"}` });
+        return res.status(400).json({ error: `Cannot write to target storage location (${safeOutputDir}): ${testResult.directError || testResult.message || "Permission denied"}` });
       }
 
       const job: WeTransferJob = {
