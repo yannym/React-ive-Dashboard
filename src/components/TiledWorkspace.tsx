@@ -9,6 +9,8 @@ import {
   CalculatorApp 
 } from './BuiltInApps';
 import { DynamicComponentLoader } from './DynamicComponentLoader';
+import { WeTransferDownloader } from './WeTransferDownloader';
+import { NasDockerMonitor } from './NasDockerMonitor';
 import { 
   LayoutGrid, 
   Columns, 
@@ -592,6 +594,16 @@ export const TiledWorkspace: React.FC<Props> = ({
                           <CalculatorApp />
                         )}
 
+                        {/* WeTransfer Downloader */}
+                        {app.url === 'internal:wetransfer' && (
+                          <WeTransferDownloader />
+                        )}
+
+                        {/* NAS Docker & MergerFS Monitor */}
+                        {app.url === 'internal:nas-docker' && (
+                          <NasDockerMonitor />
+                        )}
+
                         {/* TSX Upload nodes */}
                         {app.url?.startsWith('internal:component:') && (
                           <DynamicComponentLoader 
@@ -738,6 +750,16 @@ export const TiledWorkspace: React.FC<Props> = ({
                         {/* Calculator */}
                         {app.url === 'internal:calculator' && (
                           <CalculatorApp />
+                        )}
+
+                        {/* WeTransfer Downloader */}
+                        {app.url === 'internal:wetransfer' && (
+                          <WeTransferDownloader />
+                        )}
+
+                        {/* NAS Docker & MergerFS Monitor */}
+                        {app.url === 'internal:nas-docker' && (
+                          <NasDockerMonitor />
                         )}
 
                         {/* TSX Upload nodes */}

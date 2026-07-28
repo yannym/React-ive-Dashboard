@@ -116,6 +116,22 @@ export const BUILT_IN_APPLETS: Applet[] = [
     updatedAt: new Date().toISOString()
   },
   {
+    id: 'builtin-nas-docker',
+    name: 'NAS Docker & MergerFS Monitor',
+    description: 'Live container usage tracking for Cronpilot, Linux Webtop, and Dashy, plus MergerFS drive pool balance & I/O speed analyzer.',
+    url: 'internal:nas-docker',
+    isCustomEmbed: false,
+    icon: '🐳',
+    category: 'System',
+    tags: ['docker', 'nas', 'mergerfs', 'containers', 'cronpilot', 'webtop', 'dashy'],
+    openMode: 'iframe',
+    accentColor: 'sky',
+    isPinned: true,
+    ownerId: 'default',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
     id: 'builtin-screensaver',
     name: 'Fluid Screensaver',
     description: 'Topographic flow-field dynamic screensaver with customizable idle timeout and mouse interactive dissolving.',

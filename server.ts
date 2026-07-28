@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import http from "http";
 import { exec, spawn } from "child_process";
 import readline from "readline";
 import { createServer as createViteServer } from "vite";
@@ -1231,6 +1232,396 @@ async function startServer() {
     if (!targetPath) return res.status(400).json({ error: "Target path is required." });
     const result = testStoragePathAccess(targetPath);
     res.json(result);
+  });
+
+  // --- DOCKER CONTAINER MONITORING & SOCKET QUERY ENGINE ---
+  function queryDockerSocket(pathStr: string, methodStr: string = "GET", postData?: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const socketPath = process.env.DOCKER_SOCKET_PATH || "/var/run/docker.sock";
+      
+      // Support HTTP Docker Remote API if specified
+      if (socketPath.startsWith("http://") || socketPath.startsWith("https://")) {
+        const url = `${socketPath}${pathStr.startsWith('/') ? '' : '/'}${pathStr}`;
+        fetch(url, {
+          method: methodStr,
+          headers: { "Content-Type": "application/json" },
+          body: postData ? (typeof postData === "string" ? postData : JSON.stringify(postData)) : undefined
+        })
+        .then(async (res) => {
+          const text = await res.text();
+          try { resolve(JSON.parse(text)); } catch { resolve(text); }
+        })
+        .catch((err) => reject(err));
+        return;
+      }
+
+      if (!fs.existsSync(socketPath)) {
+        return reject(new Error(`Docker socket file '${socketPath}' not found on container filesystem.`));
+      }
+
+      const options: http.RequestOptions = {
+        socketPath,
+        path: pathStr,
+        method: methodStr,
+        headers: {
+          "Content-Type": "application/json",
+          "Host": "localhost"
+        }
+      };
+
+      const req = http.request(options, (res) => {
+        let bodyData = "";
+        res.on("data", (chunk) => { bodyData += chunk; });
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              resolve(JSON.parse(bodyData));
+            } catch (e) {
+              resolve(bodyData);
+            }
+          } else {
+            reject(new Error(`Docker API HTTP ${res.statusCode}: ${bodyData || res.statusMessage}`));
+          }
+        });
+      });
+
+      req.on("error", (err) => reject(err));
+      if (postData) {
+        req.write(typeof postData === "string" ? postData : JSON.stringify(postData));
+      }
+      req.end();
+    });
+  }
+
+  // Docker Containers Health & Usage API
+  app.get("/api/docker/containers", async (req, res) => {
+    const socketPath = process.env.DOCKER_SOCKET_PATH || "/var/run/docker.sock";
+    try {
+      const rawContainers = await queryDockerSocket("/containers/json?all=true");
+      if (Array.isArray(rawContainers)) {
+        const containers = rawContainers.map((c: any) => {
+          const names = (c.Names || []).map((n: string) => n.replace(/^\//, ""));
+          const primaryName = names[0] || c.Id.substring(0, 12);
+          const lowerName = primaryName.toLowerCase();
+          const lowerImage = (c.Image || "").toLowerCase();
+
+          // Categorize target NAS services
+          let appCategory = "other";
+          if (lowerName.includes("cronpilot") || lowerImage.includes("cronpilot")) {
+            appCategory = "cronpilot";
+          } else if (lowerName.includes("webtop") || lowerName.includes("kasm") || lowerImage.includes("webtop")) {
+            appCategory = "webtop";
+          } else if (lowerName.includes("dashy") || lowerImage.includes("dashy")) {
+            appCategory = "dashy";
+          } else if (
+            lowerName.includes("omv") || 
+            lowerName.includes("portainer") || 
+            lowerName.includes("architect") ||
+            lowerName.includes("nas") ||
+            lowerName.includes("mergerfs")
+          ) {
+            appCategory = "nas_infrastructure";
+          }
+
+          return {
+            id: c.Id,
+            shortId: c.Id.substring(0, 12),
+            name: primaryName,
+            names,
+            image: c.Image,
+            state: c.State,
+            status: c.Status,
+            created: c.Created,
+            ports: (c.Ports || []).map((p: any) => `${p.PublicPort ? p.PublicPort + ':' : ''}${p.PrivatePort}/${p.Type}`),
+            appCategory
+          };
+        });
+
+        const hasCronpilot = containers.some((c) => c.appCategory === "cronpilot");
+        const hasWebtop = containers.some((c) => c.appCategory === "webtop");
+        const hasDashy = containers.some((c) => c.appCategory === "dashy");
+
+        return res.json({
+          socketAvailable: true,
+          socketPath,
+          containers,
+          summary: {
+            total: containers.length,
+            running: containers.filter((c) => c.state === "running").length,
+            hasCronpilot,
+            hasWebtop,
+            hasDashy
+          }
+        });
+      }
+
+      res.json({ socketAvailable: true, socketPath, containers: [] });
+    } catch (err: any) {
+      res.json({
+        socketAvailable: false,
+        socketPath,
+        containers: [],
+        error: err.message || "Docker socket unreachable",
+        setupGuide: {
+          title: "Mount Docker Socket to Track NAS Containers",
+          instruction: "To connect real live stats for Cronpilot, Linux Webtop, Dashy, and OMV containers, bind '/var/run/docker.sock' in your Docker container or compose configuration.",
+          dockerComposeSnippet: "services:\n  cockpit:\n    image: node:20\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - /mnt:/mnt:ro",
+          dockerRunSnippet: "docker run -d -v /var/run/docker.sock:/var/run/docker.sock:ro -v /mnt:/mnt:ro -p 3000:3000 cockpit"
+        }
+      });
+    }
+  });
+
+  // Individual Container Real-time Stats API
+  app.get("/api/docker/containers/:id/stats", async (req, res) => {
+    try {
+      const containerId = req.params.id;
+      const stats = await queryDockerSocket(`/containers/${containerId}/stats?stream=false`);
+
+      if (stats && stats.cpu_stats) {
+        const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats?.cpu_usage?.total_usage || 0);
+        const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats?.system_cpu_usage || 0);
+        const onlineCpus = stats.cpu_stats.online_cpus || stats.cpu_stats.cpu_usage.percpu_usage?.length || 1;
+        
+        let cpuPercent = 0;
+        if (systemDelta > 0 && cpuDelta > 0) {
+          cpuPercent = parseFloat(((cpuDelta / systemDelta) * onlineCpus * 100).toFixed(1));
+        }
+
+        const cache = stats.memory_stats?.stats?.cache || stats.memory_stats?.stats?.inactive_file || 0;
+        const memoryUsage = Math.max(0, (stats.memory_stats?.usage || 0) - cache);
+        const memoryLimit = stats.memory_stats?.limit || 0;
+        const memoryPercent = memoryLimit > 0 ? parseFloat(((memoryUsage / memoryLimit) * 100).toFixed(1)) : 0;
+
+        let netRxBytes = 0;
+        let netTxBytes = 0;
+        if (stats.networks) {
+          Object.values(stats.networks).forEach((net: any) => {
+            netRxBytes += net.rx_bytes || 0;
+            netTxBytes += net.tx_bytes || 0;
+          });
+        }
+
+        return res.json({
+          containerId,
+          cpuPercent,
+          memoryUsageBytes: memoryUsage,
+          memoryLimitBytes: memoryLimit,
+          memoryPercent,
+          netRxBytes,
+          netTxBytes,
+          readTime: stats.read
+        });
+      }
+
+      res.status(404).json({ error: "Container stats unavailable" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to fetch container live stats" });
+    }
+  });
+
+  // Container Live Logs API
+  app.get("/api/docker/containers/:id/logs", async (req, res) => {
+    try {
+      const containerId = req.params.id;
+      const logs = await queryDockerSocket(`/containers/${containerId}/logs?stdout=true&stderr=true&tail=100&timestamps=true`);
+      const cleanLogs = typeof logs === "string" ? logs.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "") : String(logs);
+      res.json({ containerId, logs: cleanLogs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to fetch container logs" });
+    }
+  });
+
+  // Container Lifecycle Action API
+  app.post("/api/docker/containers/:id/action", async (req, res) => {
+    try {
+      const containerId = req.params.id;
+      const { action } = req.body;
+      if (!["start", "stop", "restart"].includes(action)) {
+        return res.status(400).json({ error: "Action must be start, stop, or restart" });
+      }
+
+      await queryDockerSocket(`/containers/${containerId}/${action}`, "POST");
+      res.json({ success: true, message: `Container ${action} signal dispatched successfully` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || `Failed to ${req.body.action} container` });
+    }
+  });
+
+  // --- MERGERFS POOL & DISK DISTRIBUTION ANALYZER API ---
+  app.get("/api/mergerfs/pools", (req, res) => {
+    try {
+      const poolCandidates: { path: string; name: string }[] = [];
+
+      try {
+        if (fs.existsSync("/proc/mounts")) {
+          const mountsContent = fs.readFileSync("/proc/mounts", "utf8");
+          const lines = mountsContent.split("\n");
+          lines.forEach((line) => {
+            if (line.includes("mergerfs") || line.includes("fuse.mergerfs")) {
+              const parts = line.split(/\s+/);
+              if (parts[1]) {
+                poolCandidates.push({
+                  path: parts[1],
+                  name: `MergerFS System Pool (${parts[1]})`
+                });
+              }
+            }
+          });
+        }
+      } catch (e) {}
+
+      const standardCandidates = [
+        { path: "/mnt/storage", name: "OMV MergerFS Storage Pool (/mnt/storage)" },
+        { path: "/mnt/pool", name: "Primary Drive Pool (/mnt/pool)" },
+        { path: "/srv/mergerfs", name: "Server MergerFS Pool (/srv/mergerfs)" },
+        { path: "/mnt/user", name: "Unraid/NAS User Share Pool (/mnt/user)" }
+      ];
+
+      standardCandidates.forEach((cand) => {
+        if (!poolCandidates.some((p) => p.path === cand.path)) {
+          poolCandidates.push(cand);
+        }
+      });
+
+      const branchCandidates = [
+        { path: "/mnt/disk1", name: "Disk 1 (HDD / SSD)" },
+        { path: "/mnt/disk2", name: "Disk 2 (HDD / SSD)" },
+        { path: "/mnt/disk3", name: "Disk 3 (HDD / SSD)" },
+        { path: "/mnt/disk4", name: "Disk 4 (HDD / SSD)" },
+        { path: "/srv/dev-disk-by-uuid-1", name: "OMV Drive UUID 1" },
+        { path: "/srv/dev-disk-by-uuid-2", name: "OMV Drive UUID 2" }
+      ];
+
+      if (process.env.MERGERFS_BRANCHES) {
+        process.env.MERGERFS_BRANCHES.split(":").forEach((bPath, idx) => {
+          if (bPath.trim()) {
+            branchCandidates.unshift({
+              path: bPath.trim(),
+              name: `Configured Drive ${idx + 1} (${bPath.trim()})`
+            });
+          }
+        });
+      }
+
+      const inspectedBranches = branchCandidates.map((b) => {
+        let exists = false;
+        let totalBytes = 0;
+        let freeBytes = 0;
+        let usedBytes = 0;
+        let fillPercent = 0;
+        let writable = false;
+
+        try {
+          if (fs.existsSync(b.path)) {
+            exists = true;
+            if (typeof fs.statfsSync === "function") {
+              const stats = fs.statfsSync(b.path);
+              freeBytes = stats.bavail * stats.bsize;
+              totalBytes = stats.blocks * stats.bsize;
+              usedBytes = Math.max(0, totalBytes - freeBytes);
+              fillPercent = totalBytes > 0 ? parseFloat(((usedBytes / totalBytes) * 100).toFixed(1)) : 0;
+            }
+
+            const testTmp = path.join(b.path, `.mfs_chk_${Date.now()}.tmp`);
+            fs.writeFileSync(testTmp, "check", "utf8");
+            fs.unlinkSync(testTmp);
+            writable = true;
+          }
+        } catch (e) {
+          writable = false;
+        }
+
+        return {
+          path: b.path,
+          name: b.name,
+          exists,
+          writable,
+          totalBytes,
+          freeBytes,
+          usedBytes,
+          fillPercent,
+          status: exists ? (writable ? "online" : "read_only") : "not_mounted"
+        };
+      });
+
+      const onlineBranches = inspectedBranches.filter((b) => b.exists);
+      const totalPoolBytes = onlineBranches.reduce((acc, b) => acc + b.totalBytes, 0);
+      const freePoolBytes = onlineBranches.reduce((acc, b) => acc + b.freeBytes, 0);
+      const usedPoolBytes = Math.max(0, totalPoolBytes - freePoolBytes);
+      const fillPercent = totalPoolBytes > 0 ? parseFloat(((usedPoolBytes / totalPoolBytes) * 100).toFixed(1)) : 0;
+
+      let distributionMessage = "No active drive branches detected.";
+      if (onlineBranches.length > 0) {
+        const fills = onlineBranches.map((b) => b.fillPercent);
+        const maxFill = Math.max(...fills);
+        const minFill = Math.min(...fills);
+        const spread = maxFill - minFill;
+
+        if (spread > 25) {
+          distributionMessage = `Imbalanced distribution: ${spread.toFixed(0)}% fill variance between drives. Consider adjusting mergerfs policy to 'mfs' or running 'mergerfs.balance'.`;
+        } else {
+          distributionMessage = `Optimal distribution: Drives are evenly balanced within ${spread.toFixed(0)}% spread.`;
+        }
+      }
+
+      res.json({
+        poolCandidates,
+        inspectedBranches,
+        summary: {
+          onlineBranchCount: onlineBranches.length,
+          totalPoolBytes,
+          usedPoolBytes,
+          freePoolBytes,
+          fillPercent,
+          createPolicy: process.env.MERGERFS_POLICY || "epmfs (Existing Path, Most Free Space)",
+          distributionMessage
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to inspect MergerFS storage pool" });
+    }
+  });
+
+  // MergerFS Drive Benchmark API
+  app.post("/api/mergerfs/benchmark", async (req, res) => {
+    try {
+      const { branchPath } = req.body;
+      if (!branchPath) return res.status(400).json({ error: "branchPath is required" });
+
+      const safePath = getSafeStoragePath(branchPath);
+      if (!fs.existsSync(safePath)) {
+        return res.status(404).json({ error: `Target branch path '${safePath}' does not exist.` });
+      }
+
+      const testFile = path.join(safePath, `.mfs_bench_${Date.now()}.dat`);
+      const testBuffer = Buffer.alloc(10 * 1024 * 1024);
+
+      const writeStart = Date.now();
+      fs.writeFileSync(testFile, testBuffer);
+      const writeDurationSec = (Date.now() - writeStart) / 1000;
+      const writeSpeedMBps = parseFloat((10 / Math.max(writeDurationSec, 0.001)).toFixed(1));
+
+      const readStart = Date.now();
+      fs.readFileSync(testFile);
+      const readDurationSec = (Date.now() - readStart) / 1000;
+      const readSpeedMBps = parseFloat((10 / Math.max(readDurationSec, 0.001)).toFixed(1));
+
+      try { fs.unlinkSync(testFile); } catch (e) {}
+
+      res.json({
+        branchPath,
+        resolvedPath: safePath,
+        writeSpeedMBps,
+        readSpeedMBps,
+        fileSizeBytes: testBuffer.length,
+        durationMs: Date.now() - writeStart,
+        status: "success",
+        rating: writeSpeedMBps > 300 ? "NVMe / SSD Speed" : writeSpeedMBps > 100 ? "SATA SSD / Fast HDD" : "HDD Speed"
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Drive speed benchmark failed" });
+    }
   });
 
   // --- NOTIFICATION ENGINE (EMAIL, SYSTEM / DESKTOP, WEBHOOKS) ---

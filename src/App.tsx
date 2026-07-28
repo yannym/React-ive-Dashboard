@@ -62,6 +62,7 @@ import { GeminiCopilot } from './components/GeminiCopilot';
 import { FluidScreensaver } from './components/FluidScreensaver';
 import { PerformanceMetricsCard } from './components/PerformanceMetricsCard';
 import { WeTransferDownloader } from './components/WeTransferDownloader';
+import { NasDockerMonitor } from './components/NasDockerMonitor';
 import { listFiles, readFile, writeFile, deleteFile, getBackendUrl } from './lib/filesystem';
 import { 
   db, 
@@ -210,6 +211,7 @@ export default function App() {
   const [dockerTotalMemMB, setDockerTotalMemMB] = useState<number>(0);
   const [dockerVersion, setDockerVersion] = useState<string>('Docker Engine v24.0.6');
   const [systemSubTab, setSystemSubTab] = useState<'docker' | 'overview'>('docker');
+  const [showNasDockerMonitorModal, setShowNasDockerMonitorModal] = useState(false);
 
   const fetchDockerContainers = async () => {
     setDockerLoading(true);
@@ -2246,6 +2248,15 @@ export default function App() {
           )}
 
           <button
+            onClick={() => setShowNasDockerMonitorModal(true)}
+            className="px-3 py-2 border border-white/5 bg-[#121212] text-white/50 hover:text-white hover:bg-blue-500/10 rounded transition flex items-center gap-1.5 cursor-pointer"
+            title="NAS Docker Engine & MergerFS Analyzer"
+          >
+            <Server className="w-4 h-4 text-blue-400" />
+            <span className="hidden lg:inline text-[10px] font-mono font-bold uppercase tracking-wider text-white/50">NAS & Docker</span>
+          </button>
+
+          <button
             onClick={handleOpenFilesystemManager}
             className="px-3 py-2 border border-white/5 bg-[#121212] text-white/50 hover:text-white hover:bg-white/5 rounded transition flex items-center gap-1.5 cursor-pointer"
             title="System Filesystem Manager"
@@ -3158,6 +3169,11 @@ export default function App() {
                     {activeApplet.url === 'internal:wetransfer' && (
                       <div className="p-6 h-full overflow-y-auto">
                         <WeTransferDownloader key={iframeRefreshKey} />
+                      </div>
+                    )}
+                    {activeApplet.url === 'internal:nas-docker' && (
+                      <div className="p-6 h-full overflow-y-auto">
+                        <NasDockerMonitor key={iframeRefreshKey} />
                       </div>
                     )}
 
@@ -5654,6 +5670,12 @@ services:
         isActive={isScreensaverActive} 
         onExit={() => setIsScreensaverActive(false)} 
       />
+
+      {showNasDockerMonitorModal && (
+        <div className="fixed inset-0 z-[280] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <NasDockerMonitor onClose={() => setShowNasDockerMonitorModal(false)} />
+        </div>
+      )}
 
     </div>
   );
