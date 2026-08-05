@@ -347,6 +347,8 @@ export default function App() {
         msg.includes('vite') || 
         msg.includes('closed without opened')
       ) {
+        event.preventDefault();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
         return; // Ignore benign Vite HMR WebSocket errors
       }
       addSystemLog('error', 'runtime', event.message, event.error?.stack);
@@ -363,6 +365,8 @@ export default function App() {
         reasonMsg.includes('vite') ||
         reasonMsg.includes('closed without opened')
       ) {
+        event.preventDefault();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
         return; // Ignore benign Vite HMR WebSocket rejections
       }
       const message = reason instanceof Error ? reason.message : String(reason);

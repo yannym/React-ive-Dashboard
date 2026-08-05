@@ -4,6 +4,53 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Google AI Studio App</title>
+    <script>
+      // Suppress benign Vite HMR / WebSocket connection rejections in sandboxed container
+      (function() {
+        const isViteWsMsg = function(msg) {
+          const s = String(msg || '');
+          return s.includes('WebSocket') || s.includes('vite') || s.includes('closed without opened') || s.includes('failed to connect');
+        };
+        const origErr = console.error;
+        const origWarn = console.warn;
+        console.error = function(...args) {
+          if (args.some(isViteWsMsg)) return;
+          origErr.apply(console, args);
+        };
+        console.warn = function(...args) {
+          if (args.some(isViteWsMsg)) return;
+          origWarn.apply(console, args);
+        };
+      })();
+
+      window.addEventListener('unhandledrejection', function(event) {
+        if (!event) return;
+        const reasonStr = String(event.reason || '');
+        const reasonMsg = String(event.reason?.message || '');
+        if (
+          reasonStr.includes('WebSocket') || 
+          reasonStr.includes('vite') ||
+          reasonMsg.includes('WebSocket') ||
+          reasonMsg.includes('vite') ||
+          reasonMsg.includes('closed without opened')
+        ) {
+          event.preventDefault();
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        }
+      }, true);
+      window.addEventListener('error', function(event) {
+        if (!event) return;
+        const msg = String(event.message || '');
+        if (
+          msg.includes('WebSocket') || 
+          msg.includes('vite') || 
+          msg.includes('closed without opened')
+        ) {
+          event.preventDefault();
+          if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        }
+      }, true);
+    </script>
   </head>
   <body>
     <div id="root"></div>
